@@ -1,0 +1,1 @@
+"""Visual assistance research prototype."""
