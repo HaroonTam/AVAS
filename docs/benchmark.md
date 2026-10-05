@@ -176,3 +176,13 @@ MPS 用 `torch.mps.synchronize()`，CPU 同步为空操作。随后在四个设�
 新模式仅接入离线入口，不改变实时告警控制流、深度数值算法、精度设置或模型权重。
 MPS 分派仅通过模拟测试，未做真实 MPS 实验；CPU 合成张量验证数值一致性，CUDA 实测见
 [2026-10-06 深度阶段诊断](benchmark_depth_profile_20261006.md)。
+
+## 预处理实现对照
+
+`app.preprocess_compare` 是独立实验入口，用本机已安装的 PIL/Torchvision 处理器做交替配对的
+CPU 预处理计时，并复用一份已校验的深度模型比较输入张量、相对深度与有效掩膜。
+它不修改 `app.main`、`app.live` 或现有深度配置中的默认 PIL 路径。
+协议 `offline_preprocessor_comparison_v1` 不属于流水线基准，不可与旧报告混合汇总。
+
+详见 [2026-10-06 预处理对照](preprocess_compare_20261006.md)，包括复现命令、计时边界、
+差值语义和实测结果。候选实现更快但未通过逐值等价检查，本次没有把它接入默认或可选生产后端。
