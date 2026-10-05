@@ -9,7 +9,13 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
-from app.benchmark_summary import aggregate_reports, load_run, main, mapping
+from app.benchmark_summary import (
+    aggregate_reports,
+    load_run,
+    main,
+    mapping,
+    slowest_samples,
+)
 
 
 def fixture(run: int, depth: bool = True) -> dict[str, object]:
@@ -122,6 +128,68 @@ def change(
 
 
 class SummaryTests(unittest.TestCase):
+    def test_slowest_samples_keep_locations_and_group_baselines(self) -> None:
+        """验证最慢样本原始索引、阶段值和同轮同图参照，避免全局基线混杂。"""
+        with tempfile.TemporaryDirectory() as directory:
+            paths = tuple(Path(directory) / f"{i}.json" for i in range(3))
+            for i, path in enumerate(paths):
+                path.write_text(json.dumps(fixture(i)), encoding="utf-8")
+            result = aggregate_reports(paths)
+            records = mapping(result["slowest_samples"])["samples"]
+            self.assertIsInstance(records, list)
+            if not isinstance(records, list):
+                self.fail("expected diagnostic records")
+            self.assertEqual(len(records), 10)
+            first = mapping(records[0])
+            self.assertEqual(
+                (first["run_index"], first["image_index"], first["sample_index"]),
+                (2, 1, 1),
+            )
+            self.assertEqual(first["image_name"], "1.jpg")
+            self.assertEqual(mapping(first["timings_ms"])["total"], 13)
+            self.assertEqual(mapping(first["same_run_image_median_ms"])["total"], 12.5)
+            self.assertEqual(mapping(first["delta_from_median_ms"])["total"], 0.5)
+            self.assertEqual(mapping(first["delta_from_median_ms"])["depth"], 0)
+            self.assertEqual(
+                [mapping(mapping(item)["timings_ms"])["total"] for item in records],
+                list(range(13, 3, -1)),
+            )
+            second = mapping(records[1])
+            self.assertEqual(mapping(second["delta_from_median_ms"])["total"], -0.5)
+
+    def test_slowest_ties_disabled_depth_and_small_input(self) -> None:
+        """并列时按原始索引稳定排序；小样本全保留，未启用深度始终为 null。"""
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "run.json"
+            report = fixture(0, depth=False)
+            for image_index in range(2):
+                for sample_index in range(2):
+                    for field in ("detection_ms", "total_ms"):
+                        change(
+                            report,
+                            ("images", image_index, "samples", sample_index, field),
+                            2,
+                        )
+            path.write_text(json.dumps(report), encoding="utf-8")
+            records = slowest_samples((load_run(path),))["samples"]
+            if not isinstance(records, list):
+                self.fail("expected diagnostic records")
+            self.assertEqual(len(records), 4)
+            self.assertEqual(
+                [
+                    (mapping(item)["image_index"], mapping(item)["sample_index"])
+                    for item in records
+                ],
+                [(0, 0), (0, 1), (1, 0), (1, 1)],
+            )
+            for item in records:
+                for field in (
+                    "timings_ms",
+                    "same_run_image_median_ms",
+                    "delta_from_median_ms",
+                ):
+                    self.assertIsNone(mapping(mapping(item)[field])["depth"])
+
     def test_pooled_and_run_mean_statistics_are_distinct(self) -> None:
         """从原始样本重算统计，区分合并分位数、轮均值分布及轮间样本标准差。"""
         with tempfile.TemporaryDirectory() as directory:

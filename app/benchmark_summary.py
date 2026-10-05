@@ -7,6 +7,7 @@ import logging
 import re
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from heapq import nsmallest
 from math import isclose, isfinite
 from pathlib import Path
 from statistics import stdev
@@ -261,8 +262,69 @@ def statistics_for_runs(
     }
 
 
+def sample_timings(sample: TimingSample) -> dict[str, float | None]:
+    """提取毫秒阶段值；深度禁用保留 None，不把目标数量混入耗时。"""
+    return {
+        "detection": sample.detection_ms,
+        "depth": sample.depth_ms,
+        "fusion": sample.fusion_ms,
+        "offline_validation": sample.offline_validation_ms,
+        "total": sample.total_ms,
+    }
+
+
+def slowest_samples(runs: tuple[ValidatedRun, ...]) -> dict[str, object]:
+    """定位总耗时最高的十个正式样本；用同轮同图阶段中位数作描述性参照。"""
+    locations = nsmallest(
+        10,
+        (
+            (-sample.total_ms, run_index, image_index, sample_index)
+            for run_index, run in enumerate(runs)
+            for image_index, group in enumerate(run.samples)
+            for sample_index, sample in enumerate(group)
+        ),
+    )
+    records: list[dict[str, object]] = []
+    for _, run_index, image_index, sample_index in locations:
+        run = runs[run_index]
+        group = run.samples[image_index]
+        actual = sample_timings(group[sample_index])
+        summary = summarize_samples(group)
+        baseline = {
+            stage: summary[stage].median_ms if stage in summary else None
+            for stage in actual
+        }
+        deltas: dict[str, float | None] = {}
+        for stage, value in actual.items():
+            reference = baseline[stage]
+            deltas[stage] = (
+                value - reference
+                if value is not None and reference is not None
+                else None
+            )
+        records.append(
+            {
+                "run_index": run_index,
+                "image_index": image_index,
+                "sample_index": sample_index,
+                "image_name": run.images[image_index]["image_name"],
+                "timings_ms": actual,
+                "same_run_image_median_ms": baseline,
+                "delta_from_median_ms": deltas,
+            }
+        )
+    return {
+        "limit": 10,
+        "order": "total_descending_then_run_image_sample_index_ascending",
+        "indices": "zero_based_sources_images_and_formal_samples",
+        "baseline": "same_run_same_image_all_formal_samples_including_selected",
+        "interpretation": "stage_medians_are_not_additive_no_causal_attribution",
+        "samples": records,
+    }
+
+
 def aggregate_reports(paths: tuple[Path, ...]) -> dict[str, object]:
-    """合并 2–20 个可比且不重复的报告；保留来源哈希和逐图、逐轮归属。"""
+    """合并可比报告并定位最慢样本；保留来源哈希及逐图、逐轮归属。"""
     if not 2 <= len(paths) <= 20:
         raise ValueError("provide 2..20 reports")
     runs = tuple(load_run(path) for path in paths)
@@ -287,6 +349,7 @@ def aggregate_reports(paths: tuple[Path, ...]) -> dict[str, object]:
             for name in ("benchmark_summary.py", "benchmark.py")
         },
         "aggregation": "equal_samples_per_image_and_run",
+        "slowest_samples": slowest_samples(runs),
         **statistics_for_runs(
             tuple(
                 tuple(sample for group in run.samples for sample in group)
