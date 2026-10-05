@@ -304,6 +304,8 @@ Before a non-trivial change, inspect the relevant code and repository instructio
 
 Do not rewrite unrelated modules, rename public APIs/directories without need, silently change experimental definitions, or replace algorithms for convenience. Keep the two instruction files synchronized when changing project rules. Report behavior changes, validation, and limitations accurately.
 
+After each coherent implementation change, run the relevant checks and create a Git commit, following section 15 before every commit. Do not automatically push; pushing requires a user request. Preserve unrelated local files and changes.
+
 ## 27. Definition of Done
 
 A task is complete when the requested behavior is implemented, responsibilities remain separated, relevant checks pass or limitations are explicitly reported, and no known regression is left unexplained.

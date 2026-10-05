@@ -5,7 +5,7 @@
 `本地图片 → OpenCV 解码 → YOLO11 → Detection 元组 → CLI JSON`
 
 启用 `--depth` 时，同一解码图像另送入 Depth Anything V2，输出原图尺寸相对逆深度。
-当前两个模型顺序运行，仅用于离线验证，不是实时并行流水线。
+两个模型在感知线程内顺序运行。另有 `app.live` 实时入口，将摄像头采集隔离到子进程、语音隔离到线程。
 
 - `app/config.py`：校验模型位置、置信度、输入尺寸和设备配置。
 - `app/vision/detector.py`：模型适配、实际类别映射、原图坐标验证。
@@ -14,6 +14,14 @@
 - `app/safety/`：验证场景时效、执行配置化确定性规则、生成独立告警事件并提供冷却接口。
 - `app/main.py`：输入输出与故障报告；图片不是实时观测。
 - `app/visualization.py`：在原图副本上绘制检测框，通过显式参数保存；不参与感知或风险判断。
+- `app/camera/`：容量 1 的采集队列与摄像头故障、超时、资源释放。
+- `app/speech/`：Windows 本地中文 TTS、有界队列、优先级抢占与播放超时。
+- `app/live.py`：显式实时入口，过期结果不作为当前事实输出，不等待 Agent。
+- `app/scene_store.py`：单帧内存存储、读取时效复核与故障清理。
+- `app/agent/tools.py`：当前事实只读工具，复用风险引擎；未接入 LLM 或 STT。
+- `app/agent/vision_agent.py`：有限文字请求、结构化草稿与输出前事实复核。
+- `app/agent/console.py`：可停止的 Windows 输入轮询及独立文字查询线程。
+- `app/agent/spoken_reply.py`：查询前绑定场景凭据、复核后低优先级提交普通回答。
 - `tests/`：不依赖权重的合成验证；AST 检查所有函数注解。
 
 实现依据：[Ultralytics Predict 接口](https://docs.ultralytics.com/modes/predict/)。
@@ -32,7 +40,7 @@ STT → 用户请求 → Agent
 风险引擎拥有风险决策；Agent 不进入紧急告警的依赖链，不能压低风险或补全未知事实。
 摄像头故障必须使场景失效；深度故障保留有效检测并明确距离未知。
 检测、深度、融合、风险、Agent、语音分别实现，不在检测器中调用语音或网络服务。
-相对深度不使用米制阈值。未来设备队列有界，告警不等待 Agent 或 STT。
+相对深度不使用米制阈值。采集和语音队列有界，告警不等待 Agent 或 STT。
 
 ## 可复现实验
 
@@ -47,3 +55,6 @@ STT → 用户请求 → Agent
 融合输出与参数见 [fusion.md](fusion.md)。CLI 在深度之后调用融合，单独记录融合延迟，
 不把该离线观测包装为实时场景。缺失深度或错帧深度不能生成米制距离或风险结论。
 风险接口和实验限制见 [risk_engine.md](risk_engine.md)。当前 CLI 明确拒绝将离线图片作为实时告警来源。
+
+实时运行、硬件前提和已知限制见 [live_pipeline.md](live_pipeline.md)。
+场景工具、帧内身份和后续回答校验边界见 [agent_tools.md](agent_tools.md)。
