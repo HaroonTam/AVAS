@@ -7,6 +7,7 @@ from typing import Callable, Protocol
 
 from app.agent.spoken_reply import SpokenReply
 from app.agent.vision_agent import VisionAssistant
+from app.speech.stt import Recognition, WindowsCommandRecognizer
 
 
 def write_console(text: str) -> None:
@@ -79,10 +80,12 @@ class ConsoleWorker:
         emit: Callable[[str], None] = write_console,
         *,
         spoken_reply: SpokenReply | None = None,
+        recognizer: WindowsCommandRecognizer | None = None,
     ) -> None:
         """初始化单个交互线程，不建立无界请求队列；必须显式 start。"""
         self._assistant = assistant
         self._spoken_reply = spoken_reply
+        self._recognizer = recognizer
         self._source = source
         self._emit = emit
         self._stop = Event()
@@ -102,6 +105,8 @@ class ConsoleWorker:
                 "文字控制台：描述周围 / 当前风险 / 寻找 椅子 / 距离 帧ID 目标ID\n"
                 "输入 quit 或 退出结束运行。\n> "
             )
+            if self._recognizer is not None:
+                self._emit("语音输入已启用：输入 listen 或 听取才开启一次麦克风。\n> ")
             while not self._stop.is_set():
                 text = self._source.poll()
                 if text is None:
@@ -115,6 +120,29 @@ class ConsoleWorker:
                 if not text.strip():
                     self._emit("> ")
                     continue
+                if text.strip() in {"listen", "听取"} and self._recognizer is not None:
+                    self._emit("正在启动本地麦克风识别，请说一个支持的命令。\n")
+                    try:
+                        recognition = self._recognizer.recognize(self._stop)
+                    except Exception:
+                        recognition = Recognition("unavailable")
+                    if self._stop.is_set():
+                        break
+                    if (
+                        recognition.status != "recognized"
+                        or recognition.command is None
+                    ):
+                        messages = {
+                            "unrecognized": "未可靠识别命令，请重试或键盘输入。",
+                            "timeout": "本次听取超时，请重试。",
+                            "unavailable": "语音输入不可用，请检查识别器和麦克风。",
+                            "cancelled": "听取已取消。",
+                        }
+                        message = messages.get(recognition.status, "输入不可用。")
+                        self._emit(f"[stt:{recognition.status}] {message}\n> ")
+                        continue
+                    text = recognition.command
+                    self._emit(f"[stt:recognized] {text}\n")
                 answer = (
                     self._spoken_reply.respond(text)
                     if self._spoken_reply is not None
@@ -143,6 +171,6 @@ class ConsoleWorker:
         if self._spoken_reply is not None:
             self._spoken_reply.close()
         if self._thread.ident is not None:
-            self._thread.join(timeout=0.5)
+            self._thread.join(timeout=1.5 if self._recognizer is not None else 0.5)
             if self._thread.is_alive():
                 self.error = "console shutdown timed out"

@@ -22,6 +22,7 @@ from app.safety.risk_engine import RiskAssessment, assess_scene
 from app.safety.scene import RiskObject, RiskScene
 from app.safety.warnings import WarningGate
 from app.scene_store import SceneStore
+from app.speech.stt import SttConfig, WindowsCommandRecognizer
 from app.speech.tts import SpeechMessage, SpeechWorker, WindowsSpeechBackend
 from app.vision.depth_estimator import RelativeDepth
 from app.vision.detector import Detection, Image, Yolo11Detector
@@ -147,6 +148,11 @@ def main(
         help="Enable Windows text queries; omit per-frame JSON output",
     )
     parser.add_argument(
+        "--voice-input",
+        action="store_true",
+        help="Enable one-shot local command STT via console listen command",
+    )
+    parser.add_argument(
         "--speak-replies",
         action="store_true",
         help="Speak validated console answers at low priority (requires --console)",
@@ -162,6 +168,8 @@ def main(
         parser.error("--max-frames must be nonnegative")
     if args.speak_replies and (not args.console or args.no_speech):
         parser.error("--speak-replies requires --console and enabled speech")
+    if args.voice_input and not args.console:
+        parser.error("--voice-input requires --console")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     camera: CameraService | None = None
     speech: SpeechWorker | None = None
@@ -203,6 +211,16 @@ def main(
                 console_source,
                 spoken_reply=SpokenReply(assistant, scene_store, speech)
                 if args.speak_replies and speech is not None
+                else None,
+                recognizer=WindowsCommandRecognizer(
+                    SttConfig(
+                        timeout_s=settings.getfloat("stt", "timeout_s", fallback=10),
+                        min_confidence=settings.getfloat(
+                            "stt", "min_confidence", fallback=0.7
+                        ),
+                    )
+                )
+                if args.voice_input
                 else None,
             )
         detector = Yolo11Detector(load_config(args.config))

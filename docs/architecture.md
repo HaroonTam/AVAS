@@ -19,7 +19,8 @@
 - `app/speech/`：Windows 本地中文 TTS、有界队列、优先级抢占与播放超时。
 - `app/live.py`：显式实时入口，过期结果不作为当前事实输出，不等待 Agent。
 - `app/scene_store.py`：单帧内存存储、读取时效复核与故障清理。
-- `app/agent/tools.py`：当前事实只读工具，复用风险引擎；未接入 LLM 或 STT。
+- `app/agent/tools.py`：当前事实只读工具，复用风险引擎；未接入 LLM。
+- `app/speech/stt.py`：按次触发的 Windows 固定命令识别，隐藏进程、超时与取消。
 - `app/agent/vision_agent.py`：有限文字请求、结构化草稿与输出前事实复核。
 - `app/agent/console.py`：可停止的 Windows 输入轮询及独立文字查询线程。
 - `app/agent/spoken_reply.py`：查询前绑定场景凭据、复核后低优先级提交普通回答。

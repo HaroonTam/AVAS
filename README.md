@@ -11,7 +11,8 @@
 已接入实时摄像头入口和 Windows 本地中文语音调度，支持高优先级抢占与故障降级。
 已实现带时效校验的单帧场景存储及五个只读 Agent 场景工具。
 已新增本地受限文字交互和输出前事实复核，可处理明确的中文查询命令。
-米制标定、LLM 交互 Agent、STT 尚未实现；真实摄像头与可听语音效果尚未完成硬件验证。
+已接入可选 Windows 本地受限命令 STT，需逐次显式触发听取。
+米制标定、LLM 交互 Agent 尚未实现；相机、语音输入输出尚未完成真实硬件验证。
 当前仍为研究原型，不能视为经过验证的行走辅助。离线图片不作为当前场景。
 
 ## 环境准备（PowerShell，Python 3.10+）
@@ -156,7 +157,7 @@ PyCharm 设置模块 `app.live`、工作目录 `$PROJECT_DIR$`，参数 `--max-f
 `get_current_risks`、`describe_surroundings`，每次查询重新检查时效。
 多目标匹配要求明确选择，距离查询必须同时提供帧 ID 与目标 ID；无有效米制证据时返回 null。
 实时告警先独立提交，之后才发布查询场景；相机故障和退出清空当前场景。
-目前是本地工具 API，未接入外部 LLM 或 STT。
+目前是本地工具 API，未接入外部 LLM；本地受限 STT 可作为命令输入。
 接口与后续接入边界见 [Agent 工具说明](docs/agent_tools.md)。
 `VisionAssistant.respond(text)` 提供确定性文字接口，支持查询环境、风险和目标。
 回答草稿输出前重新核对事实与时效；已提供 Windows 文字控制台和可选普通回答 TTS。
@@ -165,6 +166,10 @@ PyCharm 设置模块 `app.live`、工作目录 `$PROJECT_DIR$`，参数 `--max-f
 需要普通回答朗读时显式运行 `D:\python\python.exe -m app.live --console --speak-replies`。
 该模式开启声音，使用低优先级队列；播放前拒绝已过期或已换帧的回答，告警仍可抢占。
 支持语法、嵌入方式与限制见 [本地交互说明](docs/local_assistant.md)。
+
+可选语音输入：`D:\python\python.exe -m app.live --console --voice-input --no-speech`。
+该命令开启摄像头；在控制台输入 `听取` 后才打开一次麦克风，识别固定中文命令。
+本机已发现中文识别器，但未实际录音验证；要求与限制见 [语音输入说明](docs/voice_input.md)。
 
 ## 验证
 
@@ -188,6 +193,6 @@ python -m app.main --help
 2. 已接入 Depth Anything V2；继续在更多场景检查相对深度表现并测量稳态延迟。
 3. 已实现同帧空间融合、方向与实时场景时效检查；米制标定仍待实现。
 4. 已实现确定性风险引擎、实时入口与本地语音调度；下一步进行显式硬件验证与延迟测量。
-5. 已实现受时效约束的场景工具；后续接入 Agent 交互与 STT，复用本地优先语音通路。
+5. 已实现受时效约束的本地交互与受限 STT；后续验证真实输入输出并确定 LLM 后端。
 
 架构边界与实验要求见 [docs/architecture.md](docs/architecture.md) 和中英文 AGENTS 规范。

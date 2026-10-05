@@ -55,7 +55,9 @@ Windows 语音 API 依据：[SpeechSynthesizer 官方说明](https://learn.micro
 `speech_accepted` 仅为本轮进入语音队列的数量。日志是现有故障反馈，尚未配置额外的可访问硬件反馈。
 
 当前无米制支持，默认距离规则不产生 high／medium；持续未知状态可产生降级语音。
-不能用此模式声称已实现可靠的行走避障。LLM 交互 Agent、STT 和米制标定仍未实现。
+不能用此模式声称已实现可靠的行走避障。LLM 交互 Agent 和米制标定仍未实现。
+受限本地 STT 已通过 `--console --voice-input` 接入，逐次输入 `听取` 才开启麦克风；
+真实识别尚未验证，见 [语音输入说明](voice_input.md)。
 已新增内存单帧存储与只读场景工具：告警提交后发布，相机故障与退出清空；
 嵌入式使用方式和时效边界见 [Agent 工具说明](agent_tools.md)。
 
