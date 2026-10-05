@@ -16,6 +16,16 @@
 
 ## 环境准备（PowerShell，Python 3.10+）
 
+已有项目环境时，可先运行无需硬件的合成验收演示：
+
+```powershell
+D:\python\python.exe -m app.demo
+```
+
+该入口不打开摄像头、不加载模型或播放声音；`--json` 输出带合成标识的机器可读报告。
+使用固定测试输入验证融合、风险、查询和模拟语音通路，不代表真实性能或安全性。
+详见 [无硬件演示说明](docs/synthetic_demo.md)。
+
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python -m pip install -e ".[vision]"
