@@ -60,3 +60,7 @@ STT → 用户请求 → Agent
 
 实时运行、硬件前提和已知限制见 [live_pipeline.md](live_pipeline.md)。
 场景工具、帧内身份和后续回答校验边界见 [agent_tools.md](agent_tools.md)。
+
+离线重复图片基准入口 `app.benchmark` 复用现有模型、融合与离线场景接口，
+独立保存排除预热后的延迟样本及配置身份，不调用实时设备或 Agent。
+协议与计时边界见 [benchmark.md](benchmark.md)；不用于声称真实告警延迟或精度。

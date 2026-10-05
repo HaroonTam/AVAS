@@ -187,6 +187,15 @@ python -m app.main --help
 开发环境已有 Ruff 时，可执行 `python -m ruff check .` 和 `python -m ruff format --check .`。
 合成测试不验证模型精度或现实安全性；尚未测量真实精度、FPS、显存或内存占用。
 
+## 离线性能基准
+
+`D:\python\python.exe -m app.benchmark --image data/raw/test_images/street_people_cars.jpg --depth --warmup 3 --iterations 30 --output outputs/benchmark_street_run01.json`
+
+复用模型，排除预热，保存逐次检测、深度、融合和离线有效性检查耗时及统计量，
+附配置、权重与源码身份；已有报告不会覆盖。无需摄像头或音频设备。
+计时边界、离线环境设置和复现方法见 [基准说明](docs/benchmark.md)。
+处理速率不等于摄像头 FPS，离线检查耗时不等于告警延迟。
+
 ## 后续里程碑
 
 1. 准备权重与本地测试图片，验证 YOLO11 类别覆盖与实测延迟。
