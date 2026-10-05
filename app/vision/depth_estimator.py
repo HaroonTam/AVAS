@@ -11,6 +11,7 @@ from typing import BinaryIO, Protocol
 import numpy as np
 from numpy.typing import NDArray
 
+from app.vision.depth_profile import DepthProfiler
 from app.vision.detector import Image, select_device
 
 MODEL_ID = "depth-anything/Depth-Anything-V2-Small-hf"
@@ -72,21 +73,32 @@ class DepthBackend(Protocol):
 
 class DepthAnythingV2Estimator:
     def __init__(
-        self, config: DepthConfig, backend: DepthBackend | None = None
+        self,
+        config: DepthConfig,
+        backend: DepthBackend | None = None,
+        *,
+        profiler: DepthProfiler | None = None,
     ) -> None:
-        """初始化一次后复用模型；测试可注入合成后端。"""
+        """初始化一次后复用模型；仅显式传入 profiler 时采集阶段诊断。"""
+        self._profiler = profiler
         self._backend = (
-            backend if backend is not None else TransformersDepthBackend(config)
+            backend
+            if backend is not None
+            else TransformersDepthBackend(config, profiler=profiler)
         )
 
     def estimate(self, image: Image, frame_id: str) -> RelativeDepth:
-        """校验同帧深度尺寸与有效值，全无效或错位输出不能作为观测。"""
+        """校验同帧深度并可选记录阶段；失败不会完成当前诊断样本。"""
+        if self._profiler is not None:
+            self._profiler.begin()
         if not frame_id.strip():
             raise ValueError("frame_id must not be empty")
         if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
             raise ValueError("expected uint8 HxWx3 BGR image")
         if not image.shape[0] or not image.shape[1]:
             raise ValueError("image must not be empty")
+        if self._profiler is not None:
+            self._profiler.mark("input_validation")
         raw = self._backend.predict(image)
         if raw.shape != image.shape[:2] or not np.issubdtype(raw.dtype, np.floating):
             raise ValueError(
@@ -99,12 +111,17 @@ class DepthAnythingV2Estimator:
         values[~valid] = np.nan
         values.setflags(write=False)
         valid.setflags(write=False)
-        return RelativeDepth(frame_id, values, valid)
+        result = RelativeDepth(frame_id, values, valid)
+        if self._profiler is not None:
+            self._profiler.mark("output_validation")
+        return result
 
 
 class TransformersDepthBackend:
-    def __init__(self, config: DepthConfig) -> None:
-        """只加载固定身份的本地 safetensors，不联网、不执行远程模型代码。"""
+    def __init__(
+        self, config: DepthConfig, *, profiler: DepthProfiler | None = None
+    ) -> None:
+        """加载固定身份本地权重；可选诊断必须与实际执行设备一致。"""
         for name in ("config.json", "preprocessor_config.json", "model.safetensors"):
             if not (config.model_dir / name).is_file():
                 raise FileNotFoundError(
@@ -142,11 +159,14 @@ class TransformersDepthBackend:
             config.device, torch.cuda.is_available(), torch.backends.mps.is_available()
         )
         self._model.to(self._device).eval()
+        if profiler is not None and profiler.device != self._device:
+            raise ValueError("profiler device differs from depth model device")
+        self._profiler = profiler
         self._size = config.image_size
         logging.info("Depth Anything V2 Small device: %s", self._device)
 
     def predict(self, image: Image) -> DepthMap:
-        """BGR 转 RGB，按比例缩放输入，并用双三次插值映射回原图网格。"""
+        """执行原有深度推理；诊断模式在设备阶段末同步并记录墙钟时间。"""
         import torch
 
         rgb = np.ascontiguousarray(image[:, :, ::-1])
@@ -154,7 +174,12 @@ class TransformersDepthBackend:
             images=rgb,
             return_tensors="pt",
             size={"height": self._size, "width": self._size},
-        ).to(self._device)
+        )
+        if self._profiler is not None:
+            self._profiler.mark("preprocessing")
+        inputs = inputs.to(self._device)
+        if self._profiler is not None:
+            self._profiler.mark("to_device", synchronize=True)
         with torch.inference_mode():
             output = self._model(**inputs).predicted_depth
             if (
@@ -163,13 +188,19 @@ class TransformersDepthBackend:
                 or output.shape[0] != 1
             ):
                 raise RuntimeError("unexpected depth model output")
+            if self._profiler is not None:
+                self._profiler.mark("inference", synchronize=True)
             resized = torch.nn.functional.interpolate(
                 output.unsqueeze(1),
                 size=image.shape[:2],
                 mode="bicubic",
                 align_corners=False,
             )[0, 0]
+            if self._profiler is not None:
+                self._profiler.mark("resize", synchronize=True)
             values: DepthMap = resized.float().cpu().numpy()
+            if self._profiler is not None:
+                self._profiler.mark("to_cpu", synchronize=True)
         return values
 
 

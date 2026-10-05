@@ -141,3 +141,38 @@ schema 2 / `offline_multi_image_v1` 报告，要求已知 Git 修订、`code_dir
 输出没有样本级采集时间，不可据此对齐 GPU 温度或系统事件。
 不同图的常态耗时不同，全局前十不保证覆盖所有图片；完整的逐图分布仍见原统计。
 实际发现及复现命令见 [尾部延迟诊断](benchmark_tail_20261005.md)。
+
+## 显式深度阶段诊断
+
+在原命令上增加 `--profile-depth`（必须同时指定 `--depth`），启用有设备同步的阶段墙钟诊断。
+默认命令不调用诊断计时器或新增设备同步，保留原单图/多图协议与 JSON 字段。
+诊断使用 schema 3 / `offline_depth_stage_profile_v1`，单图也采用 `images` 数组；
+原 `app.benchmark_summary` 会拒绝此协议，防止与未加同步的原始基准混合汇总。
+
+每个正式样本新增 `depth_stages_ms`，每图与顶层新增 `depth_stage_summary_ms`，
+统计口径仍是 mean/median/p95/min/max，正式次数相同、图片等权；所有预热样本均排除。
+无论 CPU、CUDA 或 MPS 均使用主机 `perf_counter` 墙钟，**不是** CUDA event 或内核计时。
+
+| 深度子阶段 | 边界及同步 |
+| --- | --- |
+| input_validation | 前置设备同步完成后开始，检查输入帧 ID、类型与尺寸 |
+| preprocessing | BGR→RGB、连续内存与处理器归一化/缩放/张量构造（当前 PIL 后端在 CPU） |
+| to_device | `.to(device)` 完成后同步设备 |
+| inference | 模型前向、输出形状检查，随后同步设备 |
+| resize | 双三次插值恢复到原图尺寸，随后同步设备 |
+| to_cpu | float 转换、CPU 回传和 NumPy 视图构造，随后同步设备 |
+| output_validation | 深度尺寸/类型、复制、有效掩膜、只读标记和结果对象构造 |
+| total | 前置同步完成后的七阶段总计；包括同步等待及部分诊断记录开销 |
+
+每次 estimate 前先排空选定设备；CUDA 用 `torch.cuda.synchronize()`，
+MPS 用 `torch.mps.synchronize()`，CPU 同步为空操作。随后在四个设备阶段末同步。
+外层 `depth_ms`/`total_ms` 包含前置同步、诊断封装与返回开销，
+内部 `depth_stages_ms.total` 不含前置同步和最终记录/返回开销，因此两者不要求相等。
+计时边界之间的 Python 记录、上下文切换及同步调用开销会分摊到相邻阶段；不是纯算子时间。
+
+同步可能消除异步重叠或改变调度，主机墙钟还受 CPU/GPU 竞争影响。
+这些诊断值不能直接与未加同步的旧基准作性能提升/退化比较，也不能定位底层算子根因。
+诊断器只保留最近一次完整结果，开始新调用先清空；阶段顺序、时钟、同步或推理错误均中止报告。
+新模式仅接入离线入口，不改变实时告警控制流、深度数值算法、精度设置或模型权重。
+MPS 分派仅通过模拟测试，未做真实 MPS 实验；CPU 合成张量验证数值一致性，CUDA 实测见
+[2026-10-06 深度阶段诊断](benchmark_depth_profile_20261006.md)。

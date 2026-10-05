@@ -24,6 +24,7 @@ from app.safety.config import RiskConfig, load_risk_config
 from app.safety.risk_engine import assess_scene
 from app.safety.scene import offline_scene
 from app.vision.depth_estimator import DepthAnythingV2Estimator, load_depth_config
+from app.vision.depth_profile import STAGES, DepthProfiler
 from app.vision.detector import Image, Yolo11Detector, select_device
 
 
@@ -35,6 +36,7 @@ class TimingSample:
     offline_validation_ms: float
     total_ms: float
     object_count: int
+    depth_stages_ms: dict[str, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -67,13 +69,19 @@ def measure_once(
     fusion: FusionConfig,
     risk: RiskConfig,
     clock: Callable[[], float] = perf_counter,
+    *,
+    profiler: DepthProfiler | None = None,
 ) -> TimingSample:
-    """顺序计时到 CPU 结构化结果返回；离线风险拒绝路径不等于实时告警评估。"""
+    """记录顺序墙钟与可选深度阶段；诊断必须完成且离线流程不产生实时告警。"""
+    if profiler is not None:
+        profiler.last_sample = None
     start = clock()
     detections = detector.detect(image)
     detected = clock()
     depth = depth_model.estimate(image, frame_id) if depth_model is not None else None
     estimated = clock()
+    if profiler is not None and profiler.last_sample is None:
+        raise RuntimeError("depth profiling did not complete")
     observations = fuse_frame(
         DetectionFrame(frame_id, image.shape[1], image.shape[0], detections),
         depth,
@@ -100,6 +108,9 @@ def measure_once(
         durations[3] * 1000,
         durations[4] * 1000,
         len(observations),
+        dict(profiler.last_sample)
+        if profiler is not None and profiler.last_sample is not None
+        else None,
     )
 
 
@@ -113,15 +124,18 @@ def benchmark(
     *,
     warmup: int,
     iterations: int,
+    profiler: DepthProfiler | None = None,
 ) -> tuple[TimingSample, ...]:
-    """复用模型执行预热与有限次正式采样；任一失败中止，禁止混入降级样本。"""
+    """复用模型执行预热及正式采样；诊断同步样本同样排除预热并在故障时中止。"""
     if type(warmup) is not int or not 0 <= warmup <= 100:
         raise ValueError("warmup must be an integer within [0, 100]")
     if type(iterations) is not int or not 1 <= iterations <= 1000:
         raise ValueError("iterations must be an integer within [1, 1000]")
     samples: list[TimingSample] = []
     for index in range(warmup + iterations):
-        sample = measure_once(image, frame_id, detector, depth_model, fusion, risk)
+        sample = measure_once(
+            image, frame_id, detector, depth_model, fusion, risk, profiler=profiler
+        )
         if index >= warmup:
             samples.append(sample)
     return tuple(samples)
@@ -143,6 +157,29 @@ def summarize_samples(samples: tuple[TimingSample, ...]) -> dict[str, TimingSumm
             raise ValueError("cannot mix depth-enabled and depth-disabled samples")
         summary["depth"] = summarize(depth)
     return summary
+
+
+def sample_payload(sample: TimingSample) -> dict[str, object]:
+    """序列化样本；未启用诊断时维持原有 JSON 字段不变。"""
+    result = asdict(sample)
+    if sample.depth_stages_ms is None:
+        del result["depth_stages_ms"]
+    return result
+
+
+def summarize_depth_stages(samples: tuple[TimingSample, ...]) -> dict[str, object]:
+    """只汇总完整诊断样本；不把缺失或部分深度阶段当作零值。"""
+    values = tuple(sample.depth_stages_ms for sample in samples)
+    if not values or any(
+        value is None or set(value) != {*STAGES, "total"} for value in values
+    ):
+        raise ValueError("incomplete depth profiling samples")
+    return {
+        stage: asdict(
+            summarize(tuple(value[stage] for value in values if value is not None))
+        )
+        for stage in (*STAGES, "total")
+    }
 
 
 def file_sha256(path: Path) -> str:
@@ -230,7 +267,7 @@ def save_report(report: dict[str, object], destination: Path) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """显式对本地图片执行模型基准，输出不含原图、深度数组或目标事实。"""
+    """显式执行离线基准；深度阶段诊断独立标识，不保存原图或目标事实。"""
     parser = argparse.ArgumentParser(
         description="Offline repeated-image latency benchmark"
     )
@@ -245,9 +282,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--depth", action="store_true")
+    parser.add_argument(
+        "--profile-depth",
+        action="store_true",
+        help="Synchronize and profile depth stages; requires --depth",
+    )
     parser.add_argument("--warmup", type=int, default=3)
     parser.add_argument("--iterations", type=int, default=10)
     args = parser.parse_args(argv)
+    if args.profile_depth and not args.depth:
+        parser.error("--profile-depth requires --depth")
     if not 0 <= args.warmup <= 100 or not 1 <= args.iterations <= 1000:
         parser.error("warmup must be 0..100 and iterations 1..1000")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -283,11 +327,18 @@ def main(argv: list[str] | None = None) -> int:
         depth_device = (
             select_device(depth_config.device, cuda, mps) if depth_config else None
         )
+        profiler = (
+            DepthProfiler(depth_device)
+            if args.profile_depth and depth_device is not None
+            else None
+        )
         np.random.seed(0)
         torch.manual_seed(0)
         detector = Yolo11Detector(replace(detection, device=detection_device))
         depth_model = (
-            DepthAnythingV2Estimator(replace(depth_config, device=depth_device))
+            DepthAnythingV2Estimator(
+                replace(depth_config, device=depth_device), profiler=profiler
+            )
             if depth_config is not None and depth_device is not None
             else None
         )
@@ -313,6 +364,7 @@ def main(argv: list[str] | None = None) -> int:
                 risk,
                 warmup=args.warmup,
                 iterations=args.iterations,
+                profiler=profiler,
             )
             image_summary = summarize_samples(image_samples)
             image_reports.append(
@@ -324,12 +376,16 @@ def main(argv: list[str] | None = None) -> int:
                     "width": image.shape[1],
                     "height": image.shape[0],
                     "measurement_started_at_utc": image_started,
-                    "samples": [asdict(sample) for sample in image_samples],
+                    "samples": [sample_payload(sample) for sample in image_samples],
                     "summary_ms": {
                         name: asdict(value) for name, value in image_summary.items()
                     },
                 }
             )
+            if profiler is not None:
+                image_reports[-1]["depth_stage_summary_ms"] = summarize_depth_stages(
+                    image_samples
+                )
             all_samples.extend(image_samples)
         samples = tuple(all_samples)
         summary = summarize_samples(samples)
@@ -357,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
             "accelerator_name": torch.cuda.get_device_name()
             if "cuda" in (detection_device, depth_device)
             else None,
-            "samples": [asdict(sample) for sample in samples],
+            "samples": [sample_payload(sample) for sample in samples],
             "summary_ms": {name: asdict(value) for name, value in summary.items()},
             "serial_processing_rate_hz": 1000 / summary["total"].mean_ms
             if summary["total"].mean_ms > 0
@@ -371,7 +427,7 @@ def main(argv: list[str] | None = None) -> int:
                 "memory",
             ],
         }
-        if len(inputs) == 1:
+        if len(inputs) == 1 and profiler is None:
             for key in (
                 "image_name",
                 "image_file_sha256",
@@ -396,6 +452,25 @@ def main(argv: list[str] | None = None) -> int:
             )
             # 多图逐次样本保存在各图片条目中，避免重复存储及丢失归属。
             del report["samples"]
+        if profiler is not None:
+            report.update(
+                {
+                    "schema_version": 3,
+                    "protocol": "offline_depth_stage_profile_v1",
+                    "depth_stage_summary_ms": summarize_depth_stages(samples),
+                    "profiling": {
+                        "clock": "host_perf_counter_ms",
+                        "device": profiler.device,
+                        "synchronization": (
+                            "before_depth_and_after_to_device_inference_resize_to_cpu"
+                        ),
+                        "initial_sync_in_depth_stages_total": False,
+                        "initial_sync_in_outer_depth_ms": True,
+                        "perturbs_execution": True,
+                        "cuda_event_timing": False,
+                    },
+                }
+            )
         save_report(report, args.output)
         print(
             json.dumps(
