@@ -1,4 +1,4 @@
-"""单张离线图像重复处理基准；不评估精度、摄像头 FPS 或可听告警延迟。"""
+"""本地离线图像重复处理基准；不评估精度、摄像头 FPS 或可听告警延迟。"""
 
 import argparse
 import hashlib
@@ -236,7 +236,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     root = Path(__file__).resolve().parents[1]
     parser.add_argument("--config", type=Path, default=root / "configs/system.ini")
-    parser.add_argument("--image", type=Path, required=True)
+    parser.add_argument(
+        "--image",
+        type=Path,
+        action="append",
+        required=True,
+        help="Repeat for multiple images; processed in argument order",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--depth", action="store_true")
     parser.add_argument("--warmup", type=int, default=3)
@@ -256,11 +262,22 @@ def main(argv: list[str] | None = None) -> int:
         import cv2
         import torch
 
-        image = cv2.imdecode(np.fromfile(args.image, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
-            raise ValueError("benchmark image cannot be decoded")
-        image_hash = file_sha256(args.image)
-        frame_id = hashlib.sha256(image.tobytes()).hexdigest()
+        paths = tuple(path.resolve() for path in args.image)
+        if not 1 <= len(paths) <= 100 or len(set(paths)) != len(paths):
+            raise ValueError("provide 1..100 distinct image paths")
+        inputs: list[tuple[Path, Image, str, str]] = []
+        for path in paths:
+            image = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+            if image is None:
+                raise ValueError(f"benchmark image cannot be decoded: {path.name}")
+            inputs.append(
+                (
+                    path,
+                    image,
+                    file_sha256(path),
+                    hashlib.sha256(image.tobytes()).hexdigest(),
+                )
+            )
         cuda, mps = torch.cuda.is_available(), torch.backends.mps.is_available()
         detection_device = select_device(detection.device, cuda, mps)
         depth_device = (
@@ -283,27 +300,44 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 weights[f"depth/{name}"] = file_sha256(depth_config.model_dir / name)
         measured_at = datetime.now(timezone.utc).isoformat()
-        samples = benchmark(
-            image,
-            frame_id,
-            detector,
-            depth_model,
-            fusion,
-            risk,
-            warmup=args.warmup,
-            iterations=args.iterations,
-        )
+        image_reports: list[dict[str, object]] = []
+        all_samples: list[TimingSample] = []
+        for image_index, (path, image, image_hash, frame_id) in enumerate(inputs):
+            image_started = datetime.now(timezone.utc).isoformat()
+            image_samples = benchmark(
+                image,
+                frame_id,
+                detector,
+                depth_model,
+                fusion,
+                risk,
+                warmup=args.warmup,
+                iterations=args.iterations,
+            )
+            image_summary = summarize_samples(image_samples)
+            image_reports.append(
+                {
+                    "image_index": image_index,
+                    "image_name": path.name,
+                    "image_file_sha256": image_hash,
+                    "frame_id": frame_id,
+                    "width": image.shape[1],
+                    "height": image.shape[0],
+                    "measurement_started_at_utc": image_started,
+                    "samples": [asdict(sample) for sample in image_samples],
+                    "summary_ms": {
+                        name: asdict(value) for name, value in image_summary.items()
+                    },
+                }
+            )
+            all_samples.extend(image_samples)
+        samples = tuple(all_samples)
         summary = summarize_samples(samples)
         report: dict[str, object] = {
             "schema_version": 1,
             "protocol": "offline_repeated_image_v1",
             "measurement_started_at_utc": measured_at,
             "current_scene": False,
-            "image_name": args.image.name,
-            "image_file_sha256": image_hash,
-            "frame_id": frame_id,
-            "width": image.shape[1],
-            "height": image.shape[0],
             "warmup": args.warmup,
             "iterations": args.iterations,
             "seed": 0,
@@ -337,6 +371,31 @@ def main(argv: list[str] | None = None) -> int:
                 "memory",
             ],
         }
+        if len(inputs) == 1:
+            for key in (
+                "image_name",
+                "image_file_sha256",
+                "frame_id",
+                "width",
+                "height",
+            ):
+                report[key] = image_reports[0][key]
+        else:
+            report.update(
+                {
+                    "schema_version": 2,
+                    "protocol": "offline_multi_image_v1",
+                    "images": image_reports,
+                    "image_count": len(inputs),
+                    "sample_count": len(samples),
+                    "sampling_order": "image_major_argument_order",
+                    "warmup_scope": "per_image_before_its_samples",
+                    "iterations_scope": "per_image",
+                    "aggregation": "pooled_samples_equal_weight_per_image",
+                }
+            )
+            # 多图逐次样本保存在各图片条目中，避免重复存储及丢失归属。
+            del report["samples"]
         save_report(report, args.output)
         print(
             json.dumps(

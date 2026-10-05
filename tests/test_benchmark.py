@@ -223,3 +223,128 @@ class BenchmarkTests(unittest.TestCase):
             self.assertEqual(payload["selected_devices"]["detection"], "cpu")
             self.assertEqual(len(payload["weight_sha256"]["yolo11"]), 64)
             self.assertIn("warning_latency", payload["unmeasured"])
+
+    def test_multi_image_report_order_warmup_and_pooled_statistics(self) -> None:
+        """验证异尺寸输入、逐图预热、样本归属及合并分位数而非分位数平均。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = [root / "first.jpg", root / "second.jpg"]
+            for index, path in enumerate(paths):
+                path.write_bytes(bytes([index]))
+            weights = root / "weights.pt"
+            weights.write_bytes(b"synthetic")
+            output = root / "multi.json"
+            torch, cv2 = MagicMock(), MagicMock()
+            torch.cuda.is_available.return_value = False
+            torch.backends.mps.is_available.return_value = False
+            torch.get_num_threads.return_value = 1
+            cv2.imdecode.side_effect = [self.image, np.ones((30, 40, 3), np.uint8)]
+            timings = [
+                TimingSample(v, None, 0, 0, v, 1) for v in (999, 1, 3, 999, 10, 20)
+            ]
+            with (
+                patch.dict("sys.modules", {"torch": torch, "cv2": cv2}),
+                patch(
+                    "app.benchmark.load_config", return_value=DetectionConfig(weights)
+                ),
+                patch("app.benchmark.Yolo11Detector") as factory,
+                patch("app.benchmark.measure_once", side_effect=timings) as measure,
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--image",
+                            str(paths[0]),
+                            "--image",
+                            str(paths[1]),
+                            "--output",
+                            str(output),
+                            "--warmup",
+                            "1",
+                            "--iterations",
+                            "2",
+                        ]
+                    ),
+                    0,
+                )
+            factory.assert_called_once()
+            self.assertEqual(measure.call_count, 6)
+            calls = measure.call_args_list
+            self.assertEqual(
+                [c.args[0].shape for c in calls], [(20, 20, 3)] * 3 + [(30, 40, 3)] * 3
+            )
+            self.assertEqual(len({c.args[1] for c in calls}), 2)
+            payload = json.loads(output.read_text())
+            self.assertEqual(payload["protocol"], "offline_multi_image_v1")
+            self.assertEqual(payload["sample_count"], 4)
+            self.assertNotIn("samples", payload)
+            self.assertEqual(
+                [i["image_name"] for i in payload["images"]],
+                ["first.jpg", "second.jpg"],
+            )
+            self.assertEqual([i["image_index"] for i in payload["images"]], [0, 1])
+            self.assertEqual(
+                [i["summary_ms"]["total"]["mean_ms"] for i in payload["images"]],
+                [2, 15],
+            )
+            self.assertEqual(payload["summary_ms"]["total"]["mean_ms"], 8.5)
+            self.assertAlmostEqual(payload["summary_ms"]["total"]["p95_ms"], 18.5)
+            self.assertAlmostEqual(payload["serial_processing_rate_hz"], 1000 / 8.5)
+            self.assertNotIn("depth", payload["summary_ms"])
+
+    def test_multi_image_invalid_input_and_failure_save_no_report(self) -> None:
+        """重复路径、解码失败及中途推理故障均不能保存部分成功报告。"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first, second = root / "a.jpg", root / "b.jpg"
+            first.write_bytes(b"first")
+            second.write_bytes(b"second")
+            weights = root / "weights.pt"
+            weights.write_bytes(b"synthetic")
+            for mode in ("duplicate", "decode", "inference"):
+                output = root / f"{mode}.json"
+                torch, cv2 = MagicMock(), MagicMock()
+                torch.cuda.is_available.return_value = False
+                torch.backends.mps.is_available.return_value = False
+                torch.get_num_threads.return_value = 1
+                cv2.imdecode.side_effect = [
+                    self.image,
+                    None if mode == "decode" else self.image,
+                ]
+                with (
+                    patch.dict("sys.modules", {"torch": torch, "cv2": cv2}),
+                    patch(
+                        "app.benchmark.load_config",
+                        return_value=DetectionConfig(weights),
+                    ),
+                    patch("app.benchmark.Yolo11Detector") as factory,
+                    patch(
+                        "app.benchmark.measure_once",
+                        side_effect=[
+                            TimingSample(1, None, 0, 0, 1, 1),
+                            RuntimeError("failure"),
+                        ],
+                    ),
+                    self.assertLogs(level="ERROR"),
+                ):
+                    self.assertEqual(
+                        main(
+                            [
+                                "--image",
+                                str(first),
+                                "--image",
+                                str(first if mode == "duplicate" else second),
+                                "--output",
+                                str(output),
+                                "--warmup",
+                                "0",
+                                "--iterations",
+                                "1",
+                            ]
+                        ),
+                        1,
+                    )
+                if mode != "inference":
+                    factory.assert_not_called()
+                self.assertFalse(output.exists())
