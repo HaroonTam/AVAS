@@ -84,3 +84,46 @@ D:\python\python.exe -m app.benchmark --image data/raw/test_images/street_people
 - 任一图片缺失、解码失败或推理失败，中止且不保存部分成功报告；旧结果不覆盖。
 
 具体实测条件与汇总见 [2026-10-05 多图实验](benchmark_multi_20261005.md)。
+
+## 多轮报告汇总
+
+`app.benchmark_summary` 只读取已有多图 JSON，不运行模型或打开硬件。
+在固定干净代码修订下，分别启动新的 `app.benchmark` 进程执行相同命令，
+每轮使用不同输出名称；沿用相同图片顺序、配置、设备、预热和正式次数。
+例如连续三轮（同一 PowerShell 窗口，离线环境变量同上）：
+
+```powershell
+foreach ($round in 1..3) {
+  $report = 'outputs/benchmark_repeated_20261005_round{0:D2}.json' -f $round
+  D:\python\python.exe -m app.benchmark --image data/raw/test_images/street_people_cars.jpg --image data/raw/test_images/sidewalk_traffic.jpg --image data/raw/test_images/indoor_chairs.jpg --image data/raw/test_images/bicycle.jpg --depth --warmup 5 --iterations 30 --output $report
+  if ($LASTEXITCODE -ne 0) { throw 'Benchmark failed; inspect this round before continuing.' }
+}
+D:\python\python.exe -m app.benchmark_summary --report outputs/benchmark_repeated_20261005_round01.json --report outputs/benchmark_repeated_20261005_round02.json --report outputs/benchmark_repeated_20261005_round03.json --output outputs/benchmark_repeated_20261005_summary.json
+```
+
+上面的文件名对应已完成实验；复跑必须改为新名称。汇总接受 2–20 个
+schema 2 / `offline_multi_image_v1` 报告，要求已知 Git 修订、`code_dirty=false`，
+修订及源码哈希、权重、完整配置、已记录运行环境、采样设置和有序图片身份一致。
+单图旧协议、dirty 报告、缺失必要身份、样本数量不符、非法耗时或深度模式不一致会拒绝。
+文件内容哈希相同或测量开始时间相同的报告会拒绝，避免复制/重复路径计数；
+这不是报告来源认证，修改时间戳与内容的副本仍不能由离线汇总证明其独立性。
+
+输出协议是 `offline_multi_run_summary_v1`，统计从原始 `samples` 重新计算，
+忽略输入的预计算 `summary_ms`。顶层与每张图片均保存：
+
+| 字段 | 含义 |
+| --- | --- |
+| `pooled_summary_ms` | 全部样本直接合并的 mean/median/p95/min/max |
+| `per_run_summary_ms` | 每轮单独统计，数组顺序与 `sources` 一致 |
+| `run_mean_summary_ms` | 每轮平均耗时组成的新样本集；另含分母 n−1 的 `sample_stddev_ms` |
+| `sample_count` | 实际纳入该范围的正式样本数 |
+
+每轮、每图采样数必须相同，因此合并均值对轮与图片等权；合并分位数不是轮分位数的平均。
+轮均值标准差描述运行间均值波动，不是所有帧的标准差、标准误或置信区间；
+少量轮数的 p95 仅为描述值，不应解释为稳定的总体尾部估计。
+汇总保留输入报告名称/哈希/开始时间、共同条件及汇总工具源码哈希，原始报告只读且不覆盖。
+输出失败不生成部分统计报告；持久化与输入一样由用户显式执行，无自动上传或过期清理。
+
+元数据相等不证明硬件、电源、温度、驱动或后台负载受控；当前报告未覆盖全部运行环境。
+独立启动进程也不等于统计独立。不要把这一工具当作精度评估或自动性能回归判定。
+本次结果见 [三轮离线实验](benchmark_repeated_20261005.md)。
