@@ -7,7 +7,7 @@ from typing import Callable, Protocol
 
 from app.agent.spoken_reply import SpokenReply
 from app.agent.vision_agent import VisionAssistant
-from app.speech.stt import Recognition, WindowsCommandRecognizer
+from app.speech.stt import CommandRecognizer, Recognition
 
 
 def write_console(text: str) -> None:
@@ -80,7 +80,7 @@ class ConsoleWorker:
         emit: Callable[[str], None] = write_console,
         *,
         spoken_reply: SpokenReply | None = None,
-        recognizer: WindowsCommandRecognizer | None = None,
+        recognizer: CommandRecognizer | None = None,
     ) -> None:
         """初始化单个交互线程，不建立无界请求队列；必须显式 start。"""
         self._assistant = assistant

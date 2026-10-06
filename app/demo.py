@@ -11,6 +11,7 @@ import numpy as np
 from app.agent.spoken_reply import SpokenReply
 from app.agent.tools import SceneTools
 from app.agent.vision_agent import AssistantAnswer, VisionAssistant
+from app.demo_interaction import InteractionReport, run_interaction_demo
 from app.fusion.config import FusionConfig
 from app.fusion.depth_fusion import DetectionFrame, fuse_frame
 from app.live import dispatch_warnings
@@ -76,10 +77,11 @@ class DemoReport:
     cases: tuple[DemoCase, ...]
     simulated_speech: tuple[str, ...]
     passed: bool
+    interaction: InteractionReport
 
 
 def run_demo() -> DemoReport:
-    """运行合成融合、查询、模拟语音和失效场景，返回可机读验收结果。"""
+    """运行合成融合、查询、控制台交互及失效场景，返回可机读验收结果。"""
     clock = DemoClock()
     risk = RiskConfig()
     fusion = FusionConfig(camera_orientation="forward")
@@ -148,6 +150,16 @@ def run_demo() -> DemoReport:
                 "两个同类目标需要明确选择，不自动选首个。",
             )
         )
+        store.publish(
+            replace(
+                scene,
+                objects=(
+                    scene.objects[0],
+                    replace(scene.objects[0], id=2, direction="left"),
+                ),
+            )
+        )
+        interaction = run_interaction_demo(store, worker, backend.messages)
         store.publish(scene)
         metric_scene = replace(
             scene,
@@ -201,13 +213,16 @@ def run_demo() -> DemoReport:
         store.invalidate()
         worker.close()
     return DemoReport(
-        1,
+        2,
         True,
         risk,
         fusion,
         tuple(cases),
         tuple(backend.messages),
-        all(case.passed for case in cases) and worker.error is None,
+        all(case.passed for case in cases)
+        and worker.error is None
+        and interaction.passed,
+        interaction,
     )
 
 
@@ -229,6 +244,9 @@ def main(argv: list[str] | None = None) -> int:
         for case in report.cases:
             status = "PASS" if case.passed else "FAIL"
             print(f"{status} {case.name}: {case.answer.message}")
+        for check in report.interaction.checks:
+            status = "PASS" if check.passed else "FAIL"
+            print(f"{status} interaction/{check.name}")
         print("这些结果不验证模型精度、真实性能或行走安全。")
     return 0 if report.passed else 1
 

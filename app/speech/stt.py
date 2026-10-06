@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from math import isfinite
 from threading import Event
 from time import monotonic
-from typing import Literal
+from typing import Literal, Protocol
 
 COMMANDS: tuple[tuple[str, str], ...] = (
     ("描述周围", "描述周围"),
@@ -34,6 +34,12 @@ class Recognition:
     status: Literal["recognized", "unrecognized", "timeout", "cancelled", "unavailable"]
     command: str | None = None
     confidence: float | None = None
+
+
+class CommandRecognizer(Protocol):
+    def recognize(self, stop: Event) -> Recognition:
+        """识别一次并响应取消；返回前回收本次资源，不让调用方依赖具体设备后端。"""
+        ...
 
 
 @dataclass(frozen=True)
