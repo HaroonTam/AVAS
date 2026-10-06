@@ -597,6 +597,32 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(len(speech.submit.call_args_list), 1)
         self.assertEqual(speech.submit.call_args_list[0].args[0].expires_at, expires_at)
 
+    def test_degraded_notice_expiry_covers_the_queue_drain_ahead(self) -> None:
+        """同一批多条降级提示按前序预估时长累加预留，最后一条不被过期丢弃。"""
+        speech = MagicMock()
+        speech.submit.return_value = True
+        item = RiskObject(1, "f", "chair", 0.9, "front")
+        assessment = assess_scene(
+            RiskScene("f", 1000, "live", True, (item,)), 1000, RiskConfig()
+        )
+        with self.assertLogs(level="WARNING"):
+            accepted = dispatch_warnings(
+                assessment,
+                WarningGate(3000),
+                speech,
+                monotonic() + 1.0,
+                degraded_queue_horizon_s=8.0,
+            )
+        self.assertEqual(accepted, 2)
+        first, second = (
+            call.args[0].expires_at for call in speech.submit.call_args_list
+        )
+        # 第二条必须比第一条多出第一条的预估播放时长，否则仍会在等待中被丢弃。
+        self.assertGreaterEqual(
+            second - first,
+            speech_duration_bound("环境风险无法完整评估，请谨慎。") - 0.05,
+        )
+
     def test_final_notice_wait_follows_measured_notice(self) -> None:
         """结束提示的排空等待按文本长度计算，而不是固定 5 秒。"""
         events = (

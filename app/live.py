@@ -140,12 +140,14 @@ def dispatch_warnings(
     传入 repeat_limiter 时限制同一条文本的重复播放节奏；未传入时不限制，
     供合成测试与一次性调度使用。事件仍照常记录日志。
     传入 degraded_queue_horizon_s（大于 0）时，仅降级提示的排队有效期不低于该秒数，
-    使首条正在播放时第二条提示不会被过期清理丢弃；危险告警仍严格使用传入的
-    场景新鲜度，不放宽陈旧危险信息的播出条件。
+    并按本批已提交降级提示的预估时长累加，使后续提示在首条、第二条播放期间仍不会被
+    过期清理丢弃；危险告警仍严格使用传入的场景新鲜度，不放宽陈旧危险信息的播出条件。
     """
     now_ms = int(monotonic() * 1000)
     events = gate.select(assessment, now_ms)
     accepted = 0
+    # 本批已提交降级提示的预估总时长；后面的提示据此预留排队时间。
+    queued_bound_s = 0.0
     for event in events:
         logging.warning("%s: %s", event.kind, event.message)
         if speech is not None:
@@ -160,9 +162,14 @@ def dispatch_warnings(
                 priority = 1
             message_expiry = expires_at
             if event.kind == "degraded" and degraded_queue_horizon_s > 0:
-                message_expiry = max(expires_at, monotonic() + degraded_queue_horizon_s)
+                message_expiry = max(
+                    expires_at,
+                    monotonic() + queued_bound_s + degraded_queue_horizon_s,
+                )
             if speech.submit(SpeechMessage(event.message, priority, message_expiry)):
                 accepted += 1
+                if event.kind == "degraded" and degraded_queue_horizon_s > 0:
+                    queued_bound_s += speech_duration_bound(event.message)
     return accepted
 
 
