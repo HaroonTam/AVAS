@@ -328,3 +328,158 @@ class SttTests(unittest.TestCase):
             self.assertEqual(main(["--console", "--voice-input", "--no-speech"]), 0)
         self.assertIs(console.call_args.kwargs["recognizer"], recognizer.return_value)
         recognizer.return_value.recognize.assert_not_called()
+
+    def test_cancel_discards_late_result_and_allows_another_listen(self) -> None:
+        """取消只作用于本次听取；迟到识别不查询，下一次听取仍能正常回答。"""
+        calls: list[Event] = []
+
+        def recognize(stop: Event) -> Recognition:
+            """首次等待取消后故意返回成功，第二次正常返回。"""
+            calls.append(stop)
+            if len(calls) == 1:
+                stop.wait(1)
+                return Recognition("recognized", "寻找 椅子", 0.9)
+            return Recognition("recognized", "前方有什么", 0.9)
+
+        agent, recognizer, speaker = MagicMock(), MagicMock(), MagicMock()
+        recognizer.recognize.side_effect = recognize
+        worker = ConsoleWorker(
+            agent,
+            ScriptedInput(["listen", "取消", "listen", "quit"]),
+            MagicMock(),
+            recognizer=recognizer,
+            spoken_reply=speaker,
+        )
+        worker.start()
+        try:
+            self.assertTrue(worker.finished.wait(2))
+        finally:
+            worker.close()
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0].is_set())
+        self.assertFalse(calls[1].is_set())
+        speaker.notify.assert_called_once_with("stt:cancelled")
+        speaker.respond.assert_called_once_with("前方有什么")
+        self.assertIsNone(worker.error)
+
+    def test_quit_during_listening_signals_shutdown_and_discards_result(self) -> None:
+        """听取中的退出立即通知主循环，等待回收期间不提交迟到回答或反馈。"""
+        cancelled = Event()
+
+        def recognize(stop: Event) -> Recognition:
+            """模拟收到取消后才回收的后端。"""
+            if stop.wait(1):
+                cancelled.set()
+            return Recognition("recognized", "描述周围", 0.9)
+
+        recognizer, agent, speaker = MagicMock(), MagicMock(), MagicMock()
+        recognizer.recognize.side_effect = recognize
+        worker = ConsoleWorker(
+            agent,
+            ScriptedInput(["听取", "退出"]),
+            MagicMock(),
+            recognizer=recognizer,
+            spoken_reply=speaker,
+        )
+        worker.start()
+        try:
+            self.assertTrue(worker.exit_requested.wait(1))
+            self.assertTrue(worker.finished.wait(1))
+        finally:
+            worker.close()
+        self.assertTrue(cancelled.is_set())
+        agent.respond.assert_not_called()
+        speaker.respond.assert_not_called()
+        speaker.notify.assert_not_called()
+
+    def test_listening_discards_other_lines_without_starting_parallel_recognition(
+        self,
+    ) -> None:
+        """听取中的查询和重复听取明确拒绝，不积累请求或并发开启识别。"""
+
+        def recognize(stop: Event) -> Recognition:
+            """保持听取直到取消。"""
+            stop.wait(1)
+            return Recognition("cancelled")
+
+        recognizer, agent = MagicMock(), MagicMock()
+        recognizer.recognize.side_effect = recognize
+        output: list[str] = []
+        worker = ConsoleWorker(
+            agent,
+            ScriptedInput(["listen", "描述周围", "listen", "cancel", "quit"]),
+            output.append,
+            recognizer=recognizer,
+        )
+        worker.start()
+        try:
+            self.assertTrue(worker.finished.wait(2))
+        finally:
+            worker.close()
+        recognizer.recognize.assert_called_once()
+        agent.respond.assert_not_called()
+        self.assertEqual("".join(output).count("本行未执行"), 2)
+        self.assertIn("stt:cancelled", "".join(output))
+
+    def test_input_end_or_failure_during_listening_cancels_backend(self) -> None:
+        """EOF 和输入故障均回收识别，保留独立感知且不执行迟到命令。"""
+        for failure in (EOFError(), OSError("private request")):
+            with self.subTest(failure=type(failure).__name__):
+                cancelled = Event()
+
+                def recognize(stop: Event) -> Recognition:
+                    """记录取消已送达后端，不访问真实设备。"""
+                    if stop.wait(1):
+                        cancelled.set()
+                    return Recognition("recognized", "描述周围", 0.9)
+
+                source, recognizer, agent = MagicMock(), MagicMock(), MagicMock()
+                source.poll.side_effect = ["listen", failure]
+                recognizer.recognize.side_effect = recognize
+                worker = ConsoleWorker(
+                    agent, source, MagicMock(), recognizer=recognizer
+                )
+                worker.start()
+                try:
+                    self.assertTrue(worker.finished.wait(2))
+                finally:
+                    worker.close()
+                self.assertTrue(cancelled.is_set())
+                self.assertFalse(worker.exit_requested.is_set())
+                agent.respond.assert_not_called()
+                if isinstance(failure, EOFError):
+                    self.assertIsNone(worker.error)
+                else:
+                    self.assertEqual(worker.error, "console unavailable: OSError")
+
+    def test_unresponsive_recognizer_stops_console_after_bounded_cleanup(self) -> None:
+        """后端不响应取消时停止交互，禁止再次开麦且不让关闭无限等待。"""
+        release, returned = Event(), Event()
+
+        def recognize(stop: Event) -> Recognition:
+            """故意忽略取消，以释放事件控制模拟后端退出。"""
+            release.wait(4)
+            returned.set()
+            return Recognition("recognized", "描述周围", 0.9)
+
+        recognizer, agent = MagicMock(), MagicMock()
+        recognizer.recognize.side_effect = recognize
+        worker = ConsoleWorker(
+            agent,
+            ScriptedInput(["listen", "cancel", "listen"]),
+            MagicMock(),
+            recognizer=recognizer,
+        )
+        worker.start()
+        try:
+            self.assertTrue(worker.finished.wait(2.5))
+            self.assertEqual(
+                worker.error, "recognizer shutdown timed out; voice input stopped"
+            )
+            self.assertFalse(worker.exit_requested.is_set())
+            recognizer.recognize.assert_called_once()
+            agent.respond.assert_not_called()
+        finally:
+            release.set()
+            self.assertTrue(returned.wait(1))
+            worker.close()

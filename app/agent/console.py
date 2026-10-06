@@ -98,6 +98,53 @@ class ConsoleWorker:
         """启动后台输入及查询，不让主感知循环等待键盘。"""
         self._thread.start()
 
+    def _listen(self) -> Recognition:
+        """单次识别期间轮询取消和退出；回收有界，迟到结果丢弃，不缓存其他请求。"""
+        recognizer = self._recognizer
+        if recognizer is None:
+            return Recognition("unavailable")
+        cancel, done = Event(), Event()
+        results: list[Recognition] = []
+
+        def recognize() -> None:
+            """隔离识别调用及异常；完成事件仅在后端回收返回后设置。"""
+            try:
+                results.append(recognizer.recognize(cancel))
+            except Exception:
+                results.append(Recognition("unavailable"))
+            finally:
+                done.set()
+
+        thread = Thread(target=recognize, name="command-recognition", daemon=True)
+        thread.start()
+        try:
+            while not done.wait(0.01):
+                if self._stop.is_set():
+                    break
+                text = self._source.poll()
+                if text is None or not text.strip():
+                    continue
+                command = text.strip()
+                if command in {"quit", "exit", "退出"}:
+                    self.exit_requested.set()
+                    self._stop.set()
+                    break
+                if command in {"cancel", "取消"}:
+                    cancel.set()
+                    break
+                self._emit("正在听取；本行未执行。输入 cancel／取消，或 quit／退出。\n")
+        finally:
+            # 输入结束、故障和关闭也必须取消正在进行的识别。
+            if not done.is_set() or self._stop.is_set():
+                cancel.set()
+            thread.join(timeout=1.5)
+            if thread.is_alive():
+                self.error = "recognizer shutdown timed out; voice input stopped"
+                self._stop.set()
+        if cancel.is_set() or self._stop.is_set():
+            return Recognition("cancelled")
+        return results[0]
+
     def _run(self) -> None:
         """串行处理有限命令；输入结束只关闭交互，退出命令通知主循环。"""
         try:
@@ -121,11 +168,11 @@ class ConsoleWorker:
                     self._emit("> ")
                     continue
                 if text.strip() in {"listen", "听取"} and self._recognizer is not None:
-                    self._emit("正在启动本地麦克风识别，请说一个支持的命令。\n")
-                    try:
-                        recognition = self._recognizer.recognize(self._stop)
-                    except Exception:
-                        recognition = Recognition("unavailable")
+                    self._emit(
+                        "正在启动本地麦克风识别，请说一个支持的命令。\n"
+                        "听取期间可输入 cancel／取消，或 quit／退出。\n"
+                    )
+                    recognition = self._listen()
                     if self._stop.is_set():
                         break
                     if (
@@ -174,6 +221,6 @@ class ConsoleWorker:
         if self._spoken_reply is not None:
             self._spoken_reply.close()
         if self._thread.ident is not None:
-            self._thread.join(timeout=1.5 if self._recognizer is not None else 0.5)
+            self._thread.join(timeout=2.0 if self._recognizer is not None else 0.5)
             if self._thread.is_alive():
                 self.error = "console shutdown timed out"
