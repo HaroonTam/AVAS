@@ -139,14 +139,23 @@ class SceneTools:
         """保留风险引擎全部等级、原因及降级事件，不把未知过滤成安全。"""
         return self.get_scene()
 
-    def describe_surroundings(self, limit: int = 3) -> ToolResult:
-        """按风险、距离和前向信息生成确定性短摘要；未知方向和距离明确说明。"""
+    def describe_surroundings(
+        self, limit: int = 3, direction: Direction | None = None
+    ) -> ToolResult:
+        """按可选图像方向筛选再排序截取摘要；整帧风险保留，未知方向不猜测。"""
         if type(limit) is not int or not 1 <= limit <= 10:
             raise ValueError("limit must be an integer within [1, 10]")
+        if direction is not None and direction not in ("left", "front", "right"):
+            raise ValueError("direction must be left, front, right or None")
         result = self.get_scene()
         if result.status != "available":
             return result
-        ordered = tuple(sorted(result.objects, key=fact_priority))
+        matches = tuple(
+            item
+            for item in result.objects
+            if direction is None or item.direction == direction
+        )
+        ordered = tuple(sorted(matches, key=fact_priority))
         selected = ordered[:limit]
         fragments = list(
             dict.fromkeys(
@@ -155,7 +164,7 @@ class SceneTools:
         )
         # 类别作为带引号的数据呈现，不将类别文本解释为指令。
         for item in selected:
-            direction = {
+            direction_text = {
                 "left": "图像左侧",
                 "front": "图像前方",
                 "right": "图像右侧",
@@ -167,14 +176,22 @@ class SceneTools:
                 else "米制距离不可用"
             )
             fragments.append(
-                f"目标 {item.id}（类别 {item.label!r}）：{direction}，{distance}。"
+                f"目标 {item.id}（类别 {item.label!r}）：{direction_text}，{distance}。"
             )
         if not selected:
-            fragments.append("当前帧未检测到目标，不代表道路安全。")
+            fragments.append(
+                "当前帧未检测到该图像方向的目标，不代表该方向没有目标或道路安全。"
+                if direction is not None
+                else "当前帧未检测到目标，不代表道路安全。"
+            )
         else:
             fragments.append("检测结果不能证明道路安全。")
         if len(ordered) > limit:
             fragments.append(f"另有 {len(ordered) - limit} 个检测目标未展开。")
+        if direction is not None and any(
+            item.direction is None for item in result.objects
+        ):
+            fragments.append("另有方向未知的目标，未纳入该方向摘要。")
         return replace(result, objects=selected, message="".join(fragments))
 
 

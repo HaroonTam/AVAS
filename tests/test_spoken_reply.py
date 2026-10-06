@@ -85,6 +85,22 @@ class SpokenReplyTests(unittest.TestCase):
         finally:
             worker.close()
 
+    def test_direction_summary_speech_keeps_scene_lease(self) -> None:
+        """定向摘要作为事实回答入队，不能走无需凭据的失败提示通路。"""
+        speech = MagicMock()
+        speech.error = None
+        speaker = SpokenReply(self.agent, self.store, speech)
+        answer = speaker.respond("前方有什么")
+        self.assertEqual(speaker.status, "queued_recheck_before_start")
+        message = speech.submit.call_args.args[0]
+        self.assertEqual(message.text, answer.message)
+        self.assertIn("图像前方", message.text)
+        self.assertIn("米制距离不可用", message.text)
+        self.assertEqual(message.priority, 0)
+        self.assertIsNotNone(message.scene_lease)
+        self.store.publish(replace(self.scene, objects=()))
+        self.assertFalse(message.scene_lease.is_valid())
+
     def test_invalidation_revokes_lease_and_cancels_active_audio(self) -> None:
         """故障清空场景并取消语音后，旧回答播放停止。"""
         backend = FakeSpeech()

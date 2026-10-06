@@ -29,7 +29,7 @@
 | `find_object(label, direction=None)` | 按类别及可选图像方向 `left/front/right` 精确匹配；未知方向不满足定向查询，多个结果仍为 `ambiguous` |
 | `get_object_distance(frame_id, object_id)` | 同时核对帧与 ID；帧改变返回 `frame_mismatch`，不自动选择新目标 |
 | `get_current_risks()` | 保留引擎全部对象风险、未知原因、危险和降级事件 |
-| `describe_surroundings(limit=3)` | 最多展开 1–10 个对象，优先危险、已知近距离和前方；同类危险提示合并 |
+| `describe_surroundings(limit=3, direction=None)` | 可按图像方向筛选后展开 1–10 个对象，优先危险、已知近距离和前方；整帧危险提示合并保留 |
 
 结果为不可变 `ToolResult`，可用 `json.dumps(asdict(result), allow_nan=False)` 序列化。
 `risk_level` 和 `events` 始终描述整帧，即使 `objects` 因查找或摘要被筛选。
@@ -41,6 +41,8 @@
 本工具层不能验证支持记录真实性：发布端必须是可信米制适配器，禁止让 LLM 构造证据。
 当前真实感知没有米制适配器，所有真实距离仍不可用。
 方向为上游图像相对方向，缺失时为 null；不推断可通行方向。
+定向摘要接受 `left/front/right`，未知方向对象不参与筛选并单独提示。
+数量限制及“未展开”数量仅针对匹配方向的对象；无匹配不代表该方向没有目标或道路安全。
 
 ## 嵌入方式与后续边界
 

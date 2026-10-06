@@ -20,9 +20,12 @@ class SceneRequest:
         if self.intent not in {"describe", "risks", "find", "distance"}:
             raise ValueError("unsupported intent")
         if self.direction is not None and (
-            self.intent != "find" or self.direction not in ("left", "front", "right")
+            self.intent not in {"find", "describe"}
+            or self.direction not in ("left", "front", "right")
         ):
-            raise ValueError("only find accepts direction: left, front or right")
+            raise ValueError(
+                "only find/describe accept direction: left, front or right"
+            )
         if self.intent == "find":
             if (
                 not isinstance(self.label, str)
@@ -71,6 +74,13 @@ def parse_request(text: str) -> SceneRequest | None:
         return SceneRequest("describe")
     if text in {"risks", "当前风险", "有什么危险"}:
         return SceneRequest("risks")
+    summaries: dict[str, Direction] = {
+        "左侧有什么": "left",
+        "前方有什么": "front",
+        "右侧有什么": "right",
+    }
+    if text in summaries:
+        return SceneRequest("describe", direction=summaries[text])
     aliases = {
         "椅子": "chair",
         "人": "person",
@@ -134,7 +144,7 @@ class VisionAssistant:
     def _query(self, request: SceneRequest) -> ToolResult:
         """按已验证的结构化请求分派工具；不接受自由工具名称。"""
         if request.intent == "describe":
-            return self._tools.describe_surroundings()
+            return self._tools.describe_surroundings(direction=request.direction)
         if request.intent == "risks":
             return self._tools.get_current_risks()
         if request.intent == "find" and request.label is not None:
@@ -183,7 +193,7 @@ class VisionAssistant:
             return AssistantAnswer(
                 "unsupported_request",
                 None,
-                "请使用“描述周围”“当前风险”“寻找 椅子”"
+                "请使用“描述周围”“前方有什么”“当前风险”“寻找 椅子”"
                 "“左侧的椅子在哪里”或“距离 帧ID 目标ID”。",
             )
         try:

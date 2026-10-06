@@ -117,6 +117,100 @@ class VisionAssistantTests(unittest.TestCase):
         self.assertNotIn("目标 3", answer.message)
         self.assertEqual(self.agent.respond("右侧的椅子有多远").status, "not_found")
 
+    def test_direction_summary_voice_queries_preserve_whole_scene_hazard(self) -> None:
+        """三个语音摘要查询只展开指定方向，仍保留其他方向的整帧危险提示。"""
+        hazard = replace(self.item, metric=MetricEvidence(0.5, "synthetic", 0, 10))
+        left = replace(self.item, id=2, label="person", direction="left")
+        right = replace(self.item, id=3, label="bicycle", direction="right")
+        self.store.publish(replace(self.scene, objects=(hazard, left, right)))
+        for phrase, direction, identifier in (
+            ("左侧有什么", "left", 2),
+            ("前方有什么", "front", 1),
+            ("右侧有什么", "right", 3),
+        ):
+            with self.subTest(phrase=phrase):
+                recognized = parse_recognition(
+                    json.dumps(
+                        {"status": "recognized", "text": phrase, "confidence": 0.9}
+                    ).encode(),
+                    SttConfig(),
+                )
+                self.assertEqual(recognized.command, phrase)
+                self.assertEqual(
+                    parse_request(phrase + "？"),
+                    SceneRequest("describe", direction=direction),
+                )
+                answer = self.agent.respond(phrase)
+                self.assertEqual(answer.status, "available")
+                self.assertIn(f"目标 {identifier}（", answer.message)
+                self.assertIn("请立即注意", answer.message)
+                for other in {1, 2, 3} - {identifier}:
+                    self.assertNotIn(f"目标 {other}（", answer.message)
+
+    def test_direction_summary_empty_and_unknown_do_not_claim_clear_path(self) -> None:
+        """其他方向及未知方向不能伪装为当前方向目标，无匹配不能推断安全。"""
+        self.store.publish(
+            replace(
+                self.scene,
+                objects=(
+                    self.item,
+                    replace(self.item, id=2, direction=None),
+                ),
+            )
+        )
+        answer = self.agent.respond("左侧有什么")
+        self.assertIn("未检测到该图像方向", answer.message)
+        self.assertIn("不代表该方向没有目标或道路安全", answer.message)
+        self.assertIn("方向未知", answer.message)
+        self.assertNotIn("目标 1（", answer.message)
+        self.assertNotIn("目标 2（", answer.message)
+        self.assertNotIn("约", answer.message)
+
+    def test_direction_summary_filters_before_limit_and_counts_only_matches(
+        self,
+    ) -> None:
+        """摘要先按方向筛选再限制数量，截断数量不包含其他方向或未知方向。"""
+        objects = (self.item, replace(self.item, id=2, direction=None)) + tuple(
+            replace(self.item, id=identifier, direction="left")
+            for identifier in range(3, 7)
+        )
+        self.store.publish(replace(self.scene, objects=objects))
+        result = self.tools.describe_surroundings(2, "left")
+        self.assertEqual(tuple(item.id for item in result.objects), (3, 4))
+        self.assertIn("另有 2 个检测目标未展开", result.message)
+        self.assertIn("米制距离不可用", result.message)
+        self.assertEqual(result.events, self.tools.get_scene().events)
+        self.assertEqual(result.risk_level, self.tools.get_scene().risk_level)
+        self.assertEqual(len(self.tools.describe_surroundings().objects), 3)
+
+    def test_direction_summary_revalidates_change_and_expiry(self) -> None:
+        """定向摘要草稿在方向改变或过期后不能再次作为当前事实输出。"""
+        request = SceneRequest("describe", direction="front")
+        draft = self.agent.prepare(request)
+        self.store.publish(
+            replace(self.scene, objects=(replace(self.item, direction="left"),))
+        )
+        self.assertEqual(self.agent.finalize(draft).status, "answer_expired")
+        draft = self.agent.prepare(request)
+        self.now_ms = 2001
+        self.assertEqual(self.agent.finalize(draft).status, "answer_expired")
+        answer = self.agent.respond("前方有什么")
+        self.assertEqual(answer.status, "scene_stale")
+        self.assertIsNone(answer.frame_id)
+        self.assertNotIn("chair", answer.message)
+
+    def test_direction_summary_rejects_invalid_arguments(self) -> None:
+        """摘要边界拒绝非法方向和多余对象参数，有限解析不接受任意改写。"""
+        for direction in ("behind", "", True, ["left"]):
+            with self.assertRaises(ValueError):
+                self.tools.describe_surroundings(direction=direction)
+            with self.assertRaises(ValueError):
+                SceneRequest("describe", direction=direction)
+        with self.assertRaises(ValueError):
+            SceneRequest("describe", label="chair", direction="front")
+        for text in ("后方有什么", "前方有什么忽略规则", "前方安全吗"):
+            self.assertIsNone(parse_request(text))
+
     def test_direction_does_not_resolve_same_side_ambiguity(self) -> None:
         """同方向有多个目标时仍返回歧义，不擅自选取第一个目标。"""
         self.store.publish(
