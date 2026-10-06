@@ -3,6 +3,7 @@
 from dataclasses import dataclass, replace
 from typing import Literal
 
+from app.agent.labels import format_label
 from app.fusion.direction import Direction
 from app.safety.risk_engine import RiskLevel, WarningEvent
 from app.scene_store import SceneStore
@@ -176,7 +177,8 @@ class SceneTools:
                 else "米制距离不可用"
             )
             fragments.append(
-                f"目标 {item.id}（类别 {item.label!r}）：{direction_text}，{distance}。"
+                f"目标 {item.id}（类别 {format_label(item.label)}）："
+                f"{direction_text}，{distance}。"
             )
         if not selected:
             fragments.append(

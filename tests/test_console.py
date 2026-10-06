@@ -52,7 +52,7 @@ class ConsoleTests(unittest.TestCase):
         self.assertTrue(worker.finished.wait(1))
         worker.close()
         self.assertTrue(worker.exit_requested.is_set())
-        self.assertIn("chair", "".join(output))
+        self.assertIn("椅子", "".join(output))
         self.assertIn("米制距离不可用", "".join(output))
         self.assertIsNone(worker.error)
 

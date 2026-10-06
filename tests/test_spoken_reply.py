@@ -126,6 +126,21 @@ class SpokenReplyTests(unittest.TestCase):
         self.store.invalidate()
         self.assertFalse(message.scene_lease.is_valid())
 
+    def test_chinese_label_reaches_simulated_speech_with_scene_lease(self) -> None:
+        """中文类别回答通过现有凭据及调度器到达模拟语音后端，不直接启动音频。"""
+        backend = FakeSpeech()
+        worker = SpeechWorker(backend)
+        try:
+            speaker = SpokenReply(self.agent, self.store, worker)
+            answer = speaker.respond("椅子在哪里")
+            self.assertEqual(speaker.status, "queued_recheck_before_start")
+            self.assertTrue(backend.first.wait(1))
+            self.assertEqual(backend.messages, [answer.message])
+            self.assertIn("类别 '椅子'", backend.messages[0])
+            self.assertNotIn("chair", backend.messages[0])
+        finally:
+            worker.close()
+
     def test_invalidation_revokes_lease_and_cancels_active_audio(self) -> None:
         """故障清空场景并取消语音后，旧回答播放停止。"""
         backend = FakeSpeech()

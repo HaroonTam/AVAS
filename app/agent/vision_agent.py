@@ -3,6 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
+from app.agent.labels import LABEL_NAMES, format_label
 from app.agent.tools import ObjectFact, SceneTools, ToolResult
 from app.fusion.direction import Direction
 
@@ -81,14 +82,7 @@ def parse_request(text: str) -> SceneRequest | None:
     }
     if text in summaries:
         return SceneRequest("describe", direction=summaries[text])
-    aliases = {
-        "椅子": "chair",
-        "人": "person",
-        "自行车": "bicycle",
-        "汽车": "car",
-        "公交车": "bus",
-        "摩托车": "motorcycle",
-    }
+    aliases = {name: label for label, name in LABEL_NAMES}
     directions: dict[str, Direction] = {
         "左侧的": "left",
         "前方的": "front",
@@ -133,7 +127,9 @@ def describe_fact(item: ObjectFact) -> str:
         if item.distance_m is not None
         else "米制距离不可用"
     )
-    return f"目标 {item.id}（类别 {item.label!r}）：{direction}，{distance}。"
+    return (
+        f"目标 {item.id}（类别 {format_label(item.label)}）：{direction}，{distance}。"
+    )
 
 
 def describe_candidates(result: ToolResult) -> str:

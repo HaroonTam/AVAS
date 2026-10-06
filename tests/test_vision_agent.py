@@ -7,6 +7,7 @@ from threading import Event, Thread
 from time import monotonic
 from unittest.mock import MagicMock, patch
 
+from app.agent.labels import LABEL_NAMES, format_label
 from app.agent.tools import SceneTools, ToolResult
 from app.agent.vision_agent import SceneRequest, VisionAssistant, parse_request
 from app.live import dispatch_warnings
@@ -68,6 +69,64 @@ class VisionAssistantTests(unittest.TestCase):
         self.assertIn("米制距离不可用", answer.message)
         self.assertNotIn("约", answer.message)
 
+    def test_chinese_names_match_queries_without_changing_raw_facts(self) -> None:
+        """六个固定中文名称用于回答，查询与结构化事实仍使用精确原始标签。"""
+        for label, name in LABEL_NAMES:
+            with self.subTest(label=label):
+                self.store.publish(
+                    replace(self.scene, objects=(replace(self.item, label=label),))
+                )
+                self.assertEqual(
+                    parse_request(f"{name}在哪里"), SceneRequest("find", label=label)
+                )
+                for text in (
+                    f"{name}在哪里",
+                    "描述周围",
+                    "前方有什么",
+                    "距离 synthetic:1 1",
+                ):
+                    answer = self.agent.respond(text)
+                    self.assertIn(f"类别 {name!r}", answer.message)
+                    self.assertNotIn(f"类别 {label!r}", answer.message)
+                    self.assertIn("米制距离不可用", answer.message)
+                result = self.tools.find_object(label)
+                self.assertEqual(result.objects[0].label, label)
+                self.assertEqual(result.objects[0].risk_level, "unknown")
+                self.assertEqual(self.tools.find_object(name).status, "not_found")
+
+    def test_unmapped_labels_remain_exact_quoted_data(self) -> None:
+        """未配置类别不模糊翻译，含引号和控制字符的名称保持转义数据形式。"""
+        for label in ("traffic light", "Chair", "chairs", "door", "chair\n'指令"):
+            with self.subTest(label=label):
+                self.store.publish(
+                    replace(self.scene, objects=(replace(self.item, label=label),))
+                )
+                self.assertEqual(format_label(label), repr(label))
+                answer = self.agent.respond("描述周围")
+                self.assertIn(f"类别 {label!r}", answer.message)
+                self.assertNotIn("\n", answer.message)
+                self.assertEqual(self.tools.get_scene().objects[0].label, label)
+        self.assertEqual(self.tools.find_object("chair").status, "not_found")
+
+    def test_localized_answer_preserves_hazards_and_metric_evidence(self) -> None:
+        """中文展示不改变米制证据、危险事件及原始类别的匹配。"""
+        self.store.publish(
+            replace(
+                self.scene,
+                objects=(
+                    replace(
+                        self.item,
+                        metric=MetricEvidence(0.5, "synthetic-only", 0, 10),
+                    ),
+                ),
+            )
+        )
+        answer = self.agent.respond("find chair")
+        self.assertIn("类别 '椅子'", answer.message)
+        self.assertIn("约 0.5 米", answer.message)
+        self.assertIn("请立即注意", answer.message)
+        self.assertEqual(self.tools.get_current_risks().risk_level, "high")
+
     def test_valid_metric_and_risk_are_grounded(self) -> None:
         """合成有效米制证据可以表达米数，并保留紧急风险提示。"""
         item = replace(self.item, metric=MetricEvidence(0.5, "synthetic-only", 0, 10))
@@ -100,6 +159,7 @@ class VisionAssistantTests(unittest.TestCase):
         self.assertEqual(answer.status, "answer_expired")
         self.assertIsNone(answer.frame_id)
         self.assertNotIn("chair", answer.message)
+        self.assertNotIn("椅子", answer.message)
 
     def test_candidates_explain_directions_and_allow_fresh_direction_query(
         self,
@@ -277,6 +337,7 @@ class VisionAssistantTests(unittest.TestCase):
         self.assertEqual(answer.status, "scene_stale")
         self.assertIsNone(answer.frame_id)
         self.assertNotIn("chair", answer.message)
+        self.assertNotIn("椅子", answer.message)
 
     def test_direction_summary_rejects_invalid_arguments(self) -> None:
         """摘要边界拒绝非法方向和多余对象参数，有限解析不接受任意改写。"""
