@@ -7,14 +7,14 @@ from dataclasses import replace
 from time import monotonic, time_ns
 from unittest.mock import MagicMock, patch
 
-from app.agent.spoken_reply import SpokenReply
+from app.agent.spoken_reply import SpokenReply, feedback_text
 from app.agent.tools import SceneTools
 from app.agent.vision_agent import AssistantAnswer, VisionAssistant, usage_help
 from app.live import main
 from app.safety.config import RiskConfig
 from app.safety.scene import RiskObject, RiskScene
 from app.scene_store import SceneStore
-from app.speech.tts import SpeechMessage, SpeechWorker
+from app.speech.tts import SpeechMessage, SpeechWorker, speech_duration_bound
 from tests.test_live import FakeSpeech
 
 
@@ -379,6 +379,22 @@ class SpokenReplyTests(unittest.TestCase):
         speech.submit.assert_not_called()
         speech.cancel.assert_not_called()
 
+    def test_feedback_queued_behind_long_reply_still_plays(self) -> None:
+        """长回答播放期间提交的固定反馈不被过期清理丢弃，仍会在之后播出。"""
+        backend = FakeSpeech()
+        worker = SpeechWorker(backend)
+        try:
+            speaker = SpokenReply(self.agent, self.store, worker, queue_horizon_s=8.0)
+            speaker.notify("help")
+            self.assertTrue(backend.first.wait(1))
+            speaker.notify("stt:cancelled")
+            self.assertEqual(speaker.status, "feedback_queued")
+            backend.handles[0].stop()
+            self.assertTrue(backend.second.wait(1))
+            self.assertEqual(backend.messages[-1], feedback_text("stt:cancelled"))
+        finally:
+            worker.close()
+
     def test_live_connects_reply_adapter_to_shared_speech_worker(self) -> None:
         """显式朗读参数将控制台接到同一语音队列，不另起独立音频通路。"""
         with (
@@ -396,4 +412,59 @@ class SpokenReplyTests(unittest.TestCase):
             speech.return_value.error = None
             self.assertEqual(main(["--console", "--speak-replies"]), 0)
         self.assertIs(adapter.call_args.args[2], speech.return_value)
+        self.assertEqual(adapter.call_args.kwargs["queue_horizon_s"], 8.0)
         self.assertIs(console.call_args.kwargs["spoken_reply"], adapter.return_value)
+
+    def test_feedback_expiry_covers_a_pending_long_reply(self) -> None:
+        """长回答正在排队时，后到的固定反馈不再按固定期限一入队就过期。"""
+        speech = MagicMock()
+        speech.error = None
+        speaker = SpokenReply(self.agent, self.store, speech, queue_horizon_s=8.0)
+        before = monotonic()
+        speaker.notify("help")
+        speaker.notify("stt:cancelled")
+        messages = [call.args[0] for call in speech.submit.call_args_list]
+        self.assertEqual([message.priority for message in messages], [0, 0])
+        self.assertGreaterEqual(
+            messages[0].expires_at - before,
+            speech_duration_bound(feedback_text("help")),
+        )
+        self.assertGreaterEqual(
+            messages[1].expires_at - before,
+            speech_duration_bound(feedback_text("help")) + 8.0,
+        )
+
+    def test_zero_queue_horizon_keeps_scene_freshness(self) -> None:
+        """queue_horizon_s=0 时不扩展排队期限，行为与修复前一致。"""
+        speech = MagicMock()
+        speech.error = None
+        speaker = SpokenReply(self.agent, self.store, speech, queue_horizon_s=0.0)
+        before = monotonic()
+        speaker.notify("stt:cancelled")
+        message = speech.submit.call_args.args[0]
+        self.assertAlmostEqual(
+            message.expires_at - before,
+            self.store.config.freshness_ms / 1000,
+            delta=0.5,
+        )
+        with self.assertRaises(ValueError):
+            SpokenReply(self.agent, self.store, speech, queue_horizon_s=31.0)
+
+    def test_queue_bound_resets_after_idle_gap(self) -> None:
+        """连续提交间隔超过累计预估时长后重新计时，不无限延长排队期限。"""
+        store = SceneStore(RiskConfig(freshness_ms=1000), clock_ms=self.clock_ms)
+        speech = MagicMock()
+        speech.error = None
+        clock = MagicMock(side_effect=[0.0, 10.0])
+        with patch("app.agent.spoken_reply.monotonic", clock):
+            speaker = SpokenReply(self.agent, store, speech, queue_horizon_s=1.0)
+            speaker.notify("stt:timeout")
+            speaker.notify("stt:cancelled")
+        _, second = (call.args[0] for call in speech.submit.call_args_list)
+        accumulated = 10.0 + max(
+            1.0,
+            speech_duration_bound(feedback_text("stt:timeout")) + 1.0,
+            speech_duration_bound(feedback_text("stt:cancelled")),
+        )
+        self.assertGreater(second.expires_at, 10.0)
+        self.assertLess(second.expires_at, accumulated)

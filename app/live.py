@@ -10,7 +10,7 @@ from time import monotonic, time_ns
 from typing import Protocol
 
 from app.agent.console import ConsoleWorker, WindowsLineSource
-from app.agent.spoken_reply import SpokenReply
+from app.agent.spoken_reply import MAX_QUEUE_HORIZON_S, SpokenReply
 from app.agent.tools import SceneTools
 from app.agent.vision_agent import VisionAssistant
 from app.camera.camera_service import CameraConfig, CameraService, CapturedFrame
@@ -244,6 +244,14 @@ def main(
         )
         if not 0.0 <= degraded_queue_horizon_s <= 30.0:
             raise ValueError("degraded_queue_horizon_s must be within [0, 30]")
+        # 普通回答与固定反馈的排队上限：0 表示只按场景新鲜度，不扩展。
+        reply_queue_horizon_s = settings.getfloat(
+            "speech", "reply_queue_horizon_s", fallback=8.0
+        )
+        if not 0.0 <= reply_queue_horizon_s <= MAX_QUEUE_HORIZON_S:
+            raise ValueError(
+                f"reply_queue_horizon_s must be within [0, {MAX_QUEUE_HORIZON_S:g}]"
+            )
         gate = WarningGate(
             risk.cooldown_ms, degraded_cooldown_ms=risk.degraded_cooldown_ms
         )
@@ -265,7 +273,12 @@ def main(
             console = ConsoleWorker(
                 assistant,
                 console_source,
-                spoken_reply=SpokenReply(assistant, scene_store, speech)
+                spoken_reply=SpokenReply(
+                    assistant,
+                    scene_store,
+                    speech,
+                    queue_horizon_s=reply_queue_horizon_s,
+                )
                 if args.speak_replies and speech is not None
                 else None,
                 recognizer=WindowsCommandRecognizer(
