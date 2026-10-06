@@ -18,12 +18,17 @@ from app.config import load_config
 from app.fusion.config import FusionConfig, load_fusion_config
 from app.fusion.depth_fusion import DetectionFrame, Observation, fuse_frame
 from app.safety.config import RiskConfig, load_risk_config
-from app.safety.risk_engine import RiskAssessment, assess_scene
+from app.safety.risk_engine import RiskAssessment, WarningEvent, assess_scene
 from app.safety.scene import RiskObject, RiskScene
 from app.safety.warnings import RepeatLimiter, WarningGate
 from app.scene_store import SceneStore
 from app.speech.stt import SttConfig, WindowsCommandRecognizer
-from app.speech.tts import SpeechMessage, SpeechWorker, WindowsSpeechBackend
+from app.speech.tts import (
+    SpeechMessage,
+    SpeechWorker,
+    WindowsSpeechBackend,
+    speech_duration_bound,
+)
 from app.vision.depth_estimator import RelativeDepth
 from app.vision.detector import Detection, Image, Yolo11Detector
 
@@ -109,6 +114,18 @@ class PerceptionPipeline:
         return LiveResult(scene, observations, depth_status, timings)
 
 
+# 结束提示的排空等待上限秒数：超过该值即认为本地播放卡住，如实记录而不无限等待退出。
+SPEECH_FINAL_DRAIN_MAX_S = 20.0
+
+
+def final_notice_wait_seconds(events: tuple[WarningEvent, ...]) -> float:
+    """按最长结束提示的实测时长给出有界排空等待秒数，避免最后一条提示被截断。"""
+    longest = max(
+        (speech_duration_bound(event.message) for event in events), default=0.0
+    )
+    return min(SPEECH_FINAL_DRAIN_MAX_S, longest + 1.0)
+
+
 def dispatch_warnings(
     assessment: RiskAssessment,
     gate: WarningGate,
@@ -116,11 +133,15 @@ def dispatch_warnings(
     expires_at: float,
     *,
     repeat_limiter: RepeatLimiter | None = None,
+    degraded_queue_horizon_s: float = 0.0,
 ) -> int:
     """先记录告警再提交本地播放；完全不调用或等待 Agent，返回接收事件数。
 
     传入 repeat_limiter 时限制同一条文本的重复播放节奏；未传入时不限制，
     供合成测试与一次性调度使用。事件仍照常记录日志。
+    传入 degraded_queue_horizon_s（大于 0）时，仅降级提示的排队有效期不低于该秒数，
+    使首条正在播放时第二条提示不会被过期清理丢弃；危险告警仍严格使用传入的
+    场景新鲜度，不放宽陈旧危险信息的播出条件。
     """
     now_ms = int(monotonic() * 1000)
     events = gate.select(assessment, now_ms)
@@ -137,7 +158,10 @@ def dispatch_warnings(
                 priority = 0
             else:
                 priority = 1
-            if speech.submit(SpeechMessage(event.message, priority, expires_at)):
+            message_expiry = expires_at
+            if event.kind == "degraded" and degraded_queue_horizon_s > 0:
+                message_expiry = max(expires_at, monotonic() + degraded_queue_horizon_s)
+            if speech.submit(SpeechMessage(event.message, priority, message_expiry)):
                 accepted += 1
     return accepted
 
@@ -207,6 +231,12 @@ def main(
             settings.getint("camera", "height", fallback=480),
             settings.getfloat("camera", "timeout_s", fallback=3),
         )
+        # 降级提示的排队上限：0 表示沿用场景新鲜度；上限防止陈旧提示长期滞留。
+        degraded_queue_horizon_s = settings.getfloat(
+            "speech", "degraded_queue_horizon_s", fallback=8.0
+        )
+        if not 0.0 <= degraded_queue_horizon_s <= 30.0:
+            raise ValueError("degraded_queue_horizon_s must be within [0, 30]")
         gate = WarningGate(
             risk.cooldown_ms, degraded_cooldown_ms=risk.degraded_cooldown_ms
         )
@@ -281,6 +311,7 @@ def main(
                     speech,
                     monotonic() + 5,
                     repeat_limiter=repeat_limiter,
+                    degraded_queue_horizon_s=degraded_queue_horizon_s,
                 )
                 print(
                     json.dumps(
@@ -295,8 +326,10 @@ def main(
                     flush=True,
                 )
                 failed = True
-                # 此时感知已停止，只等待最终故障提示，超时必须明确记录。
-                if speech is not None and not speech.wait_idle(5):
+                # 此时感知已停止，只等待最终故障提示；等待按实测语速计算，超时明确记录。
+                if speech is not None and not speech.wait_idle(
+                    final_notice_wait_seconds(assessment.events)
+                ):
                     logging.error("Final unavailable notification did not finish")
                 break
             started = monotonic()
@@ -316,7 +349,12 @@ def main(
             if result.depth_status in {"unavailable", "rejected"}:
                 failed = True
             accepted = dispatch_warnings(
-                assessment, gate, speech, expiry, repeat_limiter=repeat_limiter
+                assessment,
+                gate,
+                speech,
+                expiry,
+                repeat_limiter=repeat_limiter,
+                degraded_queue_horizon_s=degraded_queue_horizon_s,
             )
             result.latencies_ms["capture_to_dispatch"] = (
                 monotonic() - frame.captured_monotonic

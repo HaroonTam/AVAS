@@ -13,6 +13,31 @@ from typing import Protocol
 
 from app.scene_store import SceneLease
 
+# 本机中文 TTS 实测（2026-10-07 硬件验收，Windows SpeechSynthesizer，rate=0，
+# Microsoft Huihui Desktop）：150 字符 39.47 s、8 字符 3.17 s，拟合为
+# 启动约 1.13 s 加 0.256 s/字符（约 3.91 字符/秒）。下列常数取更保守的值
+# （每字符约留 25% 余量），只用于播放上限与排空等待，不作为可听延迟或安全指标。
+SPEECH_STARTUP_ALLOWANCE_S = 2.0
+SPEECH_SECONDS_PER_CHAR = 0.32
+SPEECH_MAX_PLAYBACK_S = 90.0
+
+
+def speech_duration_bound(text: str) -> float:
+    """按实测语速给出单条文本的播放时长上界秒数；空文本按启动余量计算。"""
+    return SPEECH_STARTUP_ALLOWANCE_S + SPEECH_SECONDS_PER_CHAR * len(text)
+
+
+def playback_limit(text: str, configured_timeout_s: float) -> float:
+    """单条播放上限：以配置值为基础额度，再按实测语速加上文本时长并封顶。
+
+    配置的 timeout_s 仍表示单条播放的基础等待额度；长文本按长度追加时间，
+    最高不超过 SPEECH_MAX_PLAYBACK_S，避免卡死的本地播放长期占用语音队列。
+    """
+    return min(
+        SPEECH_MAX_PLAYBACK_S,
+        configured_timeout_s + SPEECH_SECONDS_PER_CHAR * len(text),
+    )
+
 
 @dataclass(frozen=True)
 class SpeechMessage:
@@ -179,6 +204,14 @@ class SpeechWorker:
             self._error = f"spoken alerts unavailable: {type(error).__name__}"
         logging.error("Spoken alerts unavailable: %s", error)
 
+    def _clear_error(self) -> None:
+        """在一次成功播放后撤销瞬时故障标记；真实后端故障会在下次播放重新置位。"""
+        with self._condition:
+            if self._error is None:
+                return
+            self._error = None
+        logging.info("Spoken alerts recovered after a successful playback")
+
     def _run(self) -> None:
         """在后台轮询播放，紧急输入抢占较低优先级，丢弃排队过期消息并限制播放时长。"""
         handle: SpeechHandle | None = None
@@ -197,7 +230,9 @@ class SpeechWorker:
                     self._cancel = False
                 if handle is not None and active is not None:
                     code = handle.poll()
-                    timed_out = monotonic() - started >= self._timeout
+                    timed_out = monotonic() - started >= playback_limit(
+                        active.text, self._timeout
+                    )
                     if (
                         code is not None
                         or timed_out
@@ -216,6 +251,10 @@ class SpeechWorker:
                                     "check installed Chinese voice/audio output"
                                 )
                             )
+                        elif code == 0:
+                            # 成功播完说明后端仍可用；撤销先前一次失败留下的标记，
+                            # 否则一次超时会永久关闭后续所有语音的提交与报告。
+                            self._clear_error()
                 if handle is None:
                     with self._condition:
                         if self._closed:

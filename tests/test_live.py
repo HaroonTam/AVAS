@@ -8,11 +8,12 @@ from contextlib import redirect_stdout
 from dataclasses import replace
 from queue import Queue
 from threading import Event
-from time import monotonic, time_ns
+from time import monotonic, sleep, time_ns
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+from app.agent.vision_agent import usage_help
 from app.camera.camera_service import (
     CameraConfig,
     CameraService,
@@ -21,9 +22,15 @@ from app.camera.camera_service import (
     publish_latest,
 )
 from app.fusion.config import FusionConfig
-from app.live import PerceptionPipeline, dispatch_warnings, main
+from app.live import (
+    SPEECH_FINAL_DRAIN_MAX_S,
+    PerceptionPipeline,
+    dispatch_warnings,
+    final_notice_wait_seconds,
+    main,
+)
 from app.safety.config import RiskConfig
-from app.safety.risk_engine import RiskAssessment, assess_scene
+from app.safety.risk_engine import RiskAssessment, WarningEvent, assess_scene
 from app.safety.scene import MetricEvidence, RiskObject, RiskScene
 from app.safety.warnings import RepeatLimiter, WarningGate
 from app.scene_store import SceneStore
@@ -32,6 +39,8 @@ from app.speech.tts import (
     SpeechMessage,
     SpeechWorker,
     WindowsSpeechBackend,
+    playback_limit,
+    speech_duration_bound,
 )
 from app.vision.depth_estimator import RelativeDepth
 from app.vision.detector import Detection, Image
@@ -85,6 +94,33 @@ class FakeSpeech:
         if len(self.messages) == 2:
             self.second.set()
         return handle
+
+
+class ScriptedHandle:
+    def __init__(self, code: int) -> None:
+        """按给定退出码立即结束，用来模拟一次成功或失败的本地播放。"""
+        self._code = code
+
+    def poll(self) -> int | None:
+        """始终返回预设退出码。"""
+        return self._code
+
+    def stop(self) -> None:
+        """播放已经结束，无需额外动作。"""
+        return None
+
+
+class ScriptedSpeech:
+    def __init__(self, codes: list[int]) -> None:
+        """按顺序为每次播放分配退出码，并记录播放文本。"""
+        self._codes = list(codes)
+        self.messages: list[str] = []
+
+    def start(self, text: str) -> SpeechHandle:
+        """返回立即结束的模拟句柄，不访问音频设备。"""
+        self.messages.append(text)
+        code = self._codes.pop(0) if self._codes else 0
+        return ScriptedHandle(code)
 
 
 class LiveTests(unittest.TestCase):
@@ -422,6 +458,7 @@ class LiveTests(unittest.TestCase):
             expires_at: float,
             *,
             repeat_limiter: RepeatLimiter | None = None,
+            degraded_queue_horizon_s: float = 0.0,
         ) -> int:
             """记录告警提交位置并核对内容限速已接入，不访问音频设备。"""
             self.assertIsNotNone(repeat_limiter)
@@ -474,3 +511,103 @@ class LiveTests(unittest.TestCase):
             )
         self.assertEqual(warnings.call_count, 2)
         self.assertIsNone(store.read().scene)
+
+    def test_playback_limit_follows_measured_speech_rate(self) -> None:
+        """播放上限以配置值为基础额度、按实测语速追加并封顶。"""
+        self.assertAlmostEqual(playback_limit("长" * 150, 15.0), 63.0, places=6)
+        self.assertEqual(playback_limit("长" * 300, 15.0), 90.0)
+        self.assertAlmostEqual(playback_limit("长" * 30, 30.0), 39.6, places=6)
+        # 较小额度仍能快速触发超时终止，供卡死播放的故障路径使用。
+        self.assertLess(playback_limit("超时", 0.03), 1.0)
+        # 帮助全文 150 字符实测需 39.47 s，播放上限与时长上界都必须覆盖该测量值。
+        self.assertGreaterEqual(playback_limit(usage_help(), 15.0), 39.47)
+        self.assertGreaterEqual(speech_duration_bound(usage_help()), 39.47)
+
+    def test_long_text_is_not_killed_by_short_configured_timeout(self) -> None:
+        """长文本按长度放宽播放上限，不再被配置下限触发超时终止。"""
+        backend = FakeSpeech()
+        worker = SpeechWorker(backend, timeout_s=0.05)
+        try:
+            worker.submit(SpeechMessage("长" * 100, 0, monotonic() + 30))
+            self.assertTrue(backend.first.wait(1))
+            sleep(0.3)
+            self.assertIsNone(worker.error)
+            self.assertFalse(backend.handles[0].stopped.is_set())
+        finally:
+            worker.close()
+
+    def test_successful_playback_clears_transient_failure(self) -> None:
+        """一次播放失败后成功的播放必须撤销故障标记，避免永久关闭语音报告。"""
+        backend = ScriptedSpeech([1, 0])
+        worker = SpeechWorker(backend)
+        try:
+            with self.assertLogs(level="ERROR"):
+                worker.submit(SpeechMessage("失败提示", 0, monotonic() + 10))
+                deadline = monotonic() + 2
+                while worker.error is None and monotonic() < deadline:
+                    sleep(0.01)
+                self.assertIsNotNone(worker.error)
+                worker.submit(SpeechMessage("正常提示", 0, monotonic() + 10))
+                deadline = monotonic() + 2
+                while worker.error is not None and monotonic() < deadline:
+                    sleep(0.01)
+                self.assertIsNone(worker.error)
+                self.assertEqual(backend.messages, ["失败提示", "正常提示"])
+        finally:
+            worker.close()
+
+    def test_degraded_queue_horizon_spares_only_degraded_notices(self) -> None:
+        """排队上限只放宽降级提示，危险告警仍使用传入的场景新鲜度。"""
+        speech = MagicMock()
+        speech.submit.return_value = True
+        expires_at = monotonic() + 1.0
+        item = RiskObject(1, "f", "chair", 0.9, "front")
+        degraded = assess_scene(
+            RiskScene("f", 1000, "live", True, (item,)), 1000, RiskConfig()
+        )
+        with self.assertLogs(level="WARNING"):
+            accepted = dispatch_warnings(
+                degraded,
+                WarningGate(3000),
+                speech,
+                expires_at,
+                degraded_queue_horizon_s=8.0,
+            )
+        self.assertEqual(accepted, 2)
+        degraded_expiries = [
+            call.args[0].expires_at for call in speech.submit.call_args_list
+        ]
+        self.assertTrue(all(value >= monotonic() + 7.0 for value in degraded_expiries))
+
+        hazard_item = RiskObject(
+            2, "f2", "chair", 0.9, "front", MetricEvidence(0.5, "synthetic-only", 0, 10)
+        )
+        hazard = assess_scene(
+            RiskScene("f2", 1000, "live", True, (hazard_item,)), 1000, RiskConfig()
+        )
+        speech.reset_mock()
+        with self.assertLogs(level="WARNING"):
+            dispatch_warnings(
+                hazard,
+                WarningGate(3000),
+                speech,
+                expires_at,
+                degraded_queue_horizon_s=8.0,
+            )
+        self.assertEqual(len(speech.submit.call_args_list), 1)
+        self.assertEqual(speech.submit.call_args_list[0].args[0].expires_at, expires_at)
+
+    def test_final_notice_wait_follows_measured_notice(self) -> None:
+        """结束提示的排空等待按文本长度计算，而不是固定 5 秒。"""
+        events = (
+            WarningEvent(
+                ("degraded", "scene_invalid"),
+                "unknown",
+                "degraded",
+                "当前环境信息不可用，请谨慎。",
+            ),
+        )
+        wait = final_notice_wait_seconds(events)
+        self.assertGreater(wait, 5.0)
+        self.assertLessEqual(wait, SPEECH_FINAL_DRAIN_MAX_S)
+        self.assertEqual(final_notice_wait_seconds(()), 1.0)
