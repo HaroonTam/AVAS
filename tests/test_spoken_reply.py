@@ -101,6 +101,31 @@ class SpokenReplyTests(unittest.TestCase):
         self.store.publish(replace(self.scene, objects=()))
         self.assertFalse(message.scene_lease.is_valid())
 
+    def test_candidate_guidance_uses_revalidated_scene_speech(self) -> None:
+        """候选方向说明作为事实回答入队，换帧后凭据撤销，不能作为固定反馈播出。"""
+        item = self.scene.objects[0]
+        self.store.publish(
+            replace(
+                self.scene,
+                objects=(
+                    replace(item, direction="left"),
+                    replace(item, id=2, direction="right"),
+                ),
+            )
+        )
+        speech = MagicMock()
+        speech.error = None
+        speaker = SpokenReply(self.agent, self.store, speech)
+        answer = speaker.respond("寻找 椅子")
+        self.assertEqual(answer.status, "ambiguous")
+        self.assertEqual(speaker.status, "queued_recheck_before_start")
+        message = speech.submit.call_args.args[0]
+        self.assertEqual(message.text, answer.message)
+        self.assertEqual(message.priority, 0)
+        self.assertIsNotNone(message.scene_lease)
+        self.store.invalidate()
+        self.assertFalse(message.scene_lease.is_valid())
+
     def test_invalidation_revokes_lease_and_cancels_active_audio(self) -> None:
         """故障清空场景并取消语音后，旧回答播放停止。"""
         backend = FakeSpeech()

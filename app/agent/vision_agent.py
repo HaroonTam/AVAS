@@ -136,6 +136,34 @@ def describe_fact(item: ObjectFact) -> str:
     return f"目标 {item.id}（类别 {item.label!r}）：{direction}，{distance}。"
 
 
+def describe_candidates(result: ToolResult) -> str:
+    """从已复核的匹配对象生成方向分布与最多三个帧内候选，不选择或推测距离。"""
+    names = {
+        "left": "图像左侧",
+        "front": "图像前方",
+        "right": "图像右侧",
+        None: "方向未知",
+    }
+    counts = {
+        direction: sum(item.direction == direction for item in result.objects)
+        for direction in names
+    }
+    distribution = "、".join(
+        f"{names[direction]} {count} 个" for direction, count in counts.items() if count
+    )
+    parts = [
+        f"共 {len(result.objects)} 个匹配目标：{distribution}。",
+        f"帧 ID：{result.frame_id}。",
+    ]
+    for item in result.objects[:3]:
+        parts.append(f"目标 {item.id}：{names[item.direction]}。")
+    if len(result.objects) > 3:
+        parts.append(f"另有 {len(result.objects) - 3} 个匹配目标未展开。")
+    if sum(counts[direction] > 0 for direction in ("left", "front", "right")) > 1:
+        parts.append("可重新按方向寻找；同方向多个目标仍需明确选择。")
+    return "".join(parts)
+
+
 class VisionAssistant:
     def __init__(self, tools: SceneTools) -> None:
         """只依赖场景查询工具，不持有告警、语音、相机或规则修改接口。"""
@@ -177,10 +205,7 @@ class VisionAssistant:
             elif current.status in {"not_found", "ambiguous"}:
                 message = "".join(warnings) + current.message
                 if current.status == "ambiguous":
-                    message += f"帧 ID：{current.frame_id}；目标 ID："
-                    message += (
-                        "、".join(str(item.id) for item in current.objects) + "。"
-                    )
+                    message += describe_candidates(current)
             else:
                 message = "".join(warnings)
                 message += "".join(describe_fact(item) for item in current.objects)

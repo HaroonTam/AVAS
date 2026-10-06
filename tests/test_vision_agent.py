@@ -78,14 +78,15 @@ class VisionAssistantTests(unittest.TestCase):
         self.assertEqual(answer.frame_id, "synthetic:1")
 
     def test_ambiguous_query_requires_explicit_identity(self) -> None:
-        """多目标查询只提供消歧身份，不自动挑选最近或首个目标。"""
+        """多目标查询提供帧内身份及方向，不自动挑选最近或首个目标。"""
         self.store.publish(
             replace(self.scene, objects=(self.item, replace(self.item, id=2)))
         )
         answer = self.agent.respond("寻找 椅子")
         self.assertEqual(answer.status, "ambiguous")
         self.assertIn("synthetic:1", answer.message)
-        self.assertIn("1、2", answer.message)
+        self.assertIn("目标 1：图像前方", answer.message)
+        self.assertIn("目标 2：图像前方", answer.message)
         self.assertEqual(
             self.agent.respond("距离 synthetic:1 2").status, "distance_unavailable"
         )
@@ -99,6 +100,84 @@ class VisionAssistantTests(unittest.TestCase):
         self.assertEqual(answer.status, "answer_expired")
         self.assertIsNone(answer.frame_id)
         self.assertNotIn("chair", answer.message)
+
+    def test_candidates_explain_directions_and_allow_fresh_direction_query(
+        self,
+    ) -> None:
+        """多方向候选提供实际分布，重新按方向查询可消歧且保留整帧危险。"""
+        left = replace(self.item, direction="left")
+        hazard = replace(
+            self.item, id=2, metric=MetricEvidence(0.5, "synthetic", 0, 10)
+        )
+        self.store.publish(replace(self.scene, objects=(left, hazard)))
+        answer = self.agent.respond("寻找 椅子")
+        self.assertEqual(answer.status, "ambiguous")
+        self.assertIn("图像左侧 1 个、图像前方 1 个", answer.message)
+        self.assertIn("目标 1：图像左侧", answer.message)
+        self.assertIn("目标 2：图像前方", answer.message)
+        self.assertIn("可重新按方向寻找", answer.message)
+        self.assertIn("请立即注意", answer.message)
+        selected = self.agent.respond("左侧的椅子在哪里")
+        self.assertEqual(selected.status, "available")
+        self.assertIn("目标 1（", selected.message)
+        self.assertIn("米制距离不可用", selected.message)
+        self.assertIn("请立即注意", selected.message)
+
+    def test_unknown_candidates_never_gain_direction_or_distance(self) -> None:
+        """未知方向候选明确标记未知，不推荐不存在的方向或编造米制距离。"""
+        self.store.publish(
+            replace(
+                self.scene,
+                objects=tuple(
+                    replace(self.item, id=identifier, direction=None)
+                    for identifier in (1, 2)
+                ),
+            )
+        )
+        answer = self.agent.respond("寻找 椅子")
+        self.assertIn("方向未知 2 个", answer.message)
+        self.assertIn("目标 1：方向未知", answer.message)
+        self.assertIn("目标 2：方向未知", answer.message)
+        self.assertNotIn("可重新按方向寻找", answer.message)
+        self.assertNotIn("图像前方", answer.message)
+        self.assertNotIn("约", answer.message)
+
+    def test_candidate_details_are_bounded_but_counts_cover_all_matches(self) -> None:
+        """大量同类目标仅展开三个身份，分布和剩余数覆盖完整匹配集合。"""
+        objects = tuple(
+            replace(self.item, id=identifier, direction="left")
+            for identifier in range(1, 21)
+        )
+        objects += (replace(self.item, id=21, direction="right"),)
+        self.store.publish(replace(self.scene, objects=objects))
+        answer = self.agent.respond("寻找 椅子")
+        self.assertEqual(answer.status, "ambiguous")
+        self.assertIn("共 21 个匹配目标", answer.message)
+        self.assertIn("图像左侧 20 个、图像右侧 1 个", answer.message)
+        self.assertIn("另有 18 个匹配目标未展开", answer.message)
+        self.assertIn("目标 3：", answer.message)
+        self.assertNotIn("目标 4：", answer.message)
+        self.assertLessEqual(len(answer.message), 300)
+        self.assertEqual(len(self.tools.find_object("chair").objects), 21)
+
+    def test_candidate_changes_in_hidden_details_reject_old_draft(self) -> None:
+        """未展开的候选变化也使草稿失效，过期时不输出任何旧候选方向。"""
+        objects = tuple(replace(self.item, id=identifier) for identifier in range(1, 5))
+        self.store.publish(replace(self.scene, objects=objects))
+        request = SceneRequest("find", label="chair")
+        draft = self.agent.prepare(request)
+        self.store.publish(
+            replace(
+                self.scene,
+                objects=objects[:3] + (replace(objects[3], direction="right"),),
+            )
+        )
+        answer = self.agent.finalize(draft)
+        self.assertEqual(answer.status, "answer_expired")
+        self.assertNotIn("目标 1", answer.message)
+        draft = self.agent.prepare(request)
+        self.now_ms = 2001
+        self.assertEqual(self.agent.finalize(draft).status, "answer_expired")
 
     def test_direction_query_selects_only_grounded_match(self) -> None:
         """方向筛选排除其他方向和未知方向，同时保留整帧危险告警。"""
@@ -218,7 +297,9 @@ class VisionAssistantTests(unittest.TestCase):
         )
         answer = self.agent.respond("前方的椅子在哪里")
         self.assertEqual(answer.status, "ambiguous")
-        self.assertIn("1、2", answer.message)
+        self.assertIn("目标 1：图像前方", answer.message)
+        self.assertIn("目标 2：图像前方", answer.message)
+        self.assertNotIn("可重新按方向寻找", answer.message)
 
     def test_direction_unknown_and_expired_remain_unavailable(self) -> None:
         """未知方向不满足方向查询，准备后方向变化或过期也不能输出旧事实。"""
