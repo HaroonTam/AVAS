@@ -11,6 +11,7 @@ from time import monotonic
 from typing import Literal, Protocol
 
 COMMANDS: tuple[tuple[str, str], ...] = (
+    ("使用帮助", "使用帮助"),
     ("描述周围", "描述周围"),
     ("左侧有什么", "左侧有什么"),
     ("前方有什么", "前方有什么"),

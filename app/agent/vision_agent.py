@@ -10,7 +10,7 @@ from app.fusion.direction import Direction
 
 @dataclass(frozen=True)
 class SceneRequest:
-    intent: Literal["describe", "risks", "find", "distance"]
+    intent: Literal["describe", "risks", "find", "distance", "help"]
     label: str | None = None
     frame_id: str | None = None
     object_id: int | None = None
@@ -18,7 +18,7 @@ class SceneRequest:
 
     def __post_init__(self) -> None:
         """拒绝未知意图和多余参数，避免含糊请求被悄然解释。"""
-        if self.intent not in {"describe", "risks", "find", "distance"}:
+        if self.intent not in {"describe", "risks", "find", "distance", "help"}:
             raise ValueError("unsupported intent")
         if self.direction is not None and (
             self.intent not in {"find", "describe"}
@@ -66,11 +66,24 @@ class AssistantAnswer:
     message: str
 
 
+def usage_help() -> str:
+    """返回无场景事实的固定操作说明，不宣称设备已启用或目标存在。"""
+    return (
+        "文字可输入：描述周围、前方有什么、寻找 椅子、左侧的椅子在哪里、当前风险。"
+        "已启用语音输入时，键盘输入听取并回车，再说寻找椅子等固定命令。"
+        "听取时可键盘输入取消；结束程序请键盘输入退出。"
+        "多个目标可按方向重查；同方向多个目标需键盘输入：距离 帧ID 目标ID。"
+        "米制距离可能不可用，检测结果不能证明道路安全。"
+    )
+
+
 def parse_request(text: str) -> SceneRequest | None:
     """解析有限命令及明确的中文问法；不执行文本中的指令或猜测任意意图。"""
     if not isinstance(text, str) or not text.strip() or len(text) > 256:
         return None
     text = text.strip().rstrip("？?")
+    if text in {"help", "帮助", "使用帮助"}:
+        return SceneRequest("help")
     if text in {"describe", "描述周围", "周围有什么"}:
         return SceneRequest("describe")
     if text in {"risks", "当前风险", "有什么危险"}:
@@ -166,7 +179,9 @@ class VisionAssistant:
         self._tools = tools
 
     def _query(self, request: SceneRequest) -> ToolResult:
-        """按已验证的结构化请求分派工具；不接受自由工具名称。"""
+        """帮助返回固定说明，其余已验证请求分派只读工具；不接受自由工具名称。"""
+        if request.intent == "help":
+            return ToolResult("help", message=usage_help())
         if request.intent == "describe":
             return self._tools.describe_surroundings(direction=request.direction)
         if request.intent == "risks":
@@ -214,7 +229,7 @@ class VisionAssistant:
             return AssistantAnswer(
                 "unsupported_request",
                 None,
-                "请使用“描述周围”“前方有什么”“当前风险”“寻找 椅子”"
+                "输入“帮助”查看用法。请使用“描述周围”“前方有什么”“当前风险”“寻找 椅子”"
                 "“左侧的椅子在哪里”或“距离 帧ID 目标ID”。",
             )
         try:

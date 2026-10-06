@@ -3,14 +3,15 @@
 from threading import Event
 from time import monotonic
 
-from app.agent.vision_agent import AssistantAnswer, VisionAssistant
+from app.agent.vision_agent import AssistantAnswer, VisionAssistant, usage_help
 from app.scene_store import SceneStore
 from app.speech.tts import SpeechMessage, SpeechWorker
 
 
 def feedback_text(status: str) -> str | None:
-    """只将白名单状态映射为本次操作反馈，不朗读外部正文或断言当前场景。"""
+    """只将白名单状态映射为固定帮助或操作反馈，不朗读外部正文或断言当前场景。"""
     messages = {
+        "help": usage_help(),
         "unsupported_request": "本次请求不支持。请说描述周围、当前风险或寻找椅子。",
         "tools_unavailable": "本次场景查询未完成，请重试。",
         "scene_unavailable": "本次查询没有可用的环境信息，请稍后重试。",
@@ -57,7 +58,7 @@ class SpokenReply:
             self.status = "feedback_queued" if accepted else "queue_rejected"
 
     def respond(self, text: str) -> AssistantAnswer:
-        """事实回答绑定场景凭据；无帧的已知失败仅朗读固定操作反馈。"""
+        """事实回答绑定场景凭据；无帧的帮助及已知失败仅朗读固定白名单文本。"""
         lease = self._store.acquire_lease()
         answer = self._assistant.respond(text)
         self.status = "not_queued"

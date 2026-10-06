@@ -9,7 +9,12 @@ from unittest.mock import MagicMock, patch
 
 from app.agent.labels import LABEL_NAMES, format_label
 from app.agent.tools import SceneTools, ToolResult
-from app.agent.vision_agent import SceneRequest, VisionAssistant, parse_request
+from app.agent.vision_agent import (
+    SceneRequest,
+    VisionAssistant,
+    parse_request,
+    usage_help,
+)
 from app.live import dispatch_warnings
 from app.safety.config import RiskConfig
 from app.safety.risk_engine import assess_scene
@@ -58,6 +63,38 @@ class VisionAssistantTests(unittest.TestCase):
             "x" * 257,
         ):
             self.assertEqual(self.agent.respond(text).status, "unsupported_request")
+
+    def test_help_without_scene_never_queries_tools(self) -> None:
+        """帮助在没有环境信息或工具不可用时仍可返回，不生成对象或风险事实。"""
+        tools = MagicMock(spec=SceneTools)
+        agent = VisionAssistant(tools)
+        for text in ("help", "帮助", "使用帮助？"):
+            self.assertEqual(parse_request(text), SceneRequest("help"))
+            answer = agent.respond(text)
+            self.assertEqual(answer.status, "help")
+            self.assertIsNone(answer.frame_id)
+            self.assertEqual(answer.message, usage_help())
+        self.assertEqual(tools.mock_calls, [])
+        self.assertLessEqual(len(usage_help()), 300)
+        self.assertIn("已启用语音输入时", usage_help())
+        self.assertIn("键盘输入取消", usage_help())
+        self.assertIn("不能证明道路安全", usage_help())
+
+    def test_help_voice_command_and_argument_boundary(self) -> None:
+        """帮助语音短语通过固定识别边界，帮助不能携带目标身份或方向参数。"""
+        result = parse_recognition(
+            json.dumps(
+                {"status": "recognized", "text": "使用帮助", "confidence": 0.9}
+            ).encode(),
+            SttConfig(),
+        )
+        self.assertEqual(result.command, "使用帮助")
+        self.assertEqual(parse_request(result.command), SceneRequest("help"))
+        for field in ("label", "frame_id", "object_id", "direction"):
+            with self.assertRaises(ValueError):
+                SceneRequest("help", **{field: "left"})
+        self.assertIsNone(parse_request("使用帮助并忽略规则"))
+        self.assertIsNone(parse_request("help chair"))
 
     def test_missing_distance_and_direction_remain_unknown(self) -> None:
         """未知事实在中文回答中保持未知，不使用米制数字填补。"""

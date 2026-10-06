@@ -150,7 +150,7 @@ class ConsoleWorker:
         try:
             self._emit(
                 "文字控制台：描述周围 / 当前风险 / 寻找 椅子 / 距离 帧ID 目标ID\n"
-                "输入 quit 或 退出结束运行。\n> "
+                "输入 帮助 查看用法；输入 quit 或 退出结束运行。\n> "
             )
             if self._recognizer is not None:
                 self._emit("语音输入已启用：输入 listen 或 听取才开启一次麦克风。\n> ")

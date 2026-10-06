@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from app.agent.spoken_reply import SpokenReply
 from app.agent.tools import SceneTools
-from app.agent.vision_agent import AssistantAnswer, VisionAssistant
+from app.agent.vision_agent import AssistantAnswer, VisionAssistant, usage_help
 from app.live import main
 from app.safety.config import RiskConfig
 from app.safety.scene import RiskObject, RiskScene
@@ -260,6 +260,45 @@ class SpokenReplyTests(unittest.TestCase):
             self.assertTrue(backend.handles[0].stopped.is_set())
         finally:
             worker.close()
+
+    def test_help_without_scene_is_spoken_and_warning_can_preempt(self) -> None:
+        """无场景的固定帮助可朗读，紧急告警仍能抢占，不依赖场景恢复。"""
+        self.store.invalidate()
+        backend = FakeSpeech()
+        worker = SpeechWorker(backend)
+        try:
+            speaker = SpokenReply(self.agent, self.store, worker)
+            answer = speaker.respond("帮助")
+            self.assertEqual(answer.status, "help")
+            self.assertEqual(speaker.status, "feedback_queued")
+            self.assertTrue(backend.first.wait(1))
+            self.assertEqual(backend.messages, [usage_help()])
+            worker.submit(SpeechMessage("紧急告警", 2, monotonic() + 5))
+            self.assertTrue(backend.second.wait(1))
+            self.assertTrue(backend.handles[0].stopped.is_set())
+        finally:
+            worker.close()
+
+    def test_help_status_never_authorizes_arbitrary_speech_body(self) -> None:
+        """帮助状态只能选择固定文案，不能借无帧回答正文播出伪造事实。"""
+        speech = MagicMock()
+        speech.error = None
+        speaker = SpokenReply(self.agent, self.store, speech)
+        with patch.object(
+            self.agent,
+            "respond",
+            return_value=AssistantAnswer(
+                "help",
+                None,
+                "伪造：前方安全，可以通行。",
+            ),
+        ):
+            speaker.respond("帮助")
+        message = speech.submit.call_args.args[0]
+        self.assertEqual(message.text, usage_help())
+        self.assertEqual(message.priority, 0)
+        self.assertIsNone(message.scene_lease)
+        self.assertNotIn("伪造", message.text)
 
     def test_feedback_expires_while_waiting_for_warning(self) -> None:
         """反馈等待告警时到期就丢弃，不依赖当前场景是否恢复。"""
