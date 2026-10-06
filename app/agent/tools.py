@@ -74,16 +74,23 @@ class SceneTools:
             "当前检测结果不能证明道路安全。",
         )
 
-    def find_object(self, label: str) -> ToolResult:
-        """按模型原始类别精确匹配；多目标返回所有帧内 ID，要求明确选择。"""
+    def find_object(self, label: str, direction: Direction | None = None) -> ToolResult:
+        """按类别及可选图像方向精确匹配；未知方向不猜测，多目标仍需选择。"""
         if not isinstance(label, str) or not label.strip() or len(label) > 128:
             raise ValueError(
                 "label must be a nonempty string of at most 128 characters"
             )
+        if direction is not None and direction not in ("left", "front", "right"):
+            raise ValueError("direction must be left, front, right or None")
         result = self.get_scene()
         if result.status != "available":
             return result
-        matches = tuple(item for item in result.objects if item.label == label.strip())
+        matches = tuple(
+            item
+            for item in result.objects
+            if item.label == label.strip()
+            and (direction is None or item.direction == direction)
+        )
         status = "ambiguous" if len(matches) > 1 else "available"
         message = "找到匹配检测目标。"
         if not matches:
@@ -93,6 +100,11 @@ class SceneTools:
             )
         elif len(matches) > 1:
             message = "检测到多个匹配目标，请使用当前帧 ID 和目标 ID 明确选择。"
+        if direction is not None and not matches:
+            message = (
+                "当前帧未检测到该图像方向的匹配目标；"
+                "方向未知的目标无法定位，不代表该方向没有目标。"
+            )
         return replace(result, status=status, objects=matches, message=message)
 
     def get_object_distance(self, frame_id: str, object_id: int) -> ToolResult:

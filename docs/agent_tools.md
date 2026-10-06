@@ -26,7 +26,7 @@
 | 方法 | 结果与约束 |
 | --- | --- |
 | `get_scene()` | 当前帧对象、采集时间、风险等级与事件；失效时对象和事件为空 |
-| `find_object(label)` | 按模型原始类别精确匹配；多个结果为 `ambiguous`，返回全部匹配 ID |
+| `find_object(label, direction=None)` | 按类别及可选图像方向 `left/front/right` 精确匹配；未知方向不满足定向查询，多个结果仍为 `ambiguous` |
 | `get_object_distance(frame_id, object_id)` | 同时核对帧与 ID；帧改变返回 `frame_mismatch`，不自动选择新目标 |
 | `get_current_risks()` | 保留引擎全部对象风险、未知原因、危险和降级事件 |
 | `describe_surroundings(limit=3)` | 最多展开 1–10 个对象，优先危险、已知近距离和前方；同类危险提示合并 |

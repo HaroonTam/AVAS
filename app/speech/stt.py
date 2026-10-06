@@ -19,6 +19,10 @@ COMMANDS: tuple[tuple[str, str], ...] = (
     ("寻找汽车", "寻找 汽车"),
     ("寻找公交车", "寻找 公交车"),
     ("寻找摩托车", "寻找 摩托车"),
+) + tuple(
+    (f"{direction}的{label}在哪里", f"{direction}的{label}在哪里")
+    for direction in ("左侧", "前方", "右侧")
+    for label in ("椅子", "人", "自行车", "汽车", "公交车", "摩托车")
 )
 
 

@@ -1,5 +1,6 @@
 """本地文字交互和回答失效测试，不打开设备或调用外部服务。"""
 
+import json
 import unittest
 from dataclasses import replace
 from threading import Event, Thread
@@ -14,6 +15,7 @@ from app.safety.risk_engine import assess_scene
 from app.safety.scene import MetricEvidence, RiskObject, RiskScene
 from app.safety.warnings import WarningGate
 from app.scene_store import SceneStore
+from app.speech.stt import COMMANDS, SttConfig, parse_recognition
 
 
 class VisionAssistantTests(unittest.TestCase):
@@ -97,6 +99,77 @@ class VisionAssistantTests(unittest.TestCase):
         self.assertEqual(answer.status, "answer_expired")
         self.assertIsNone(answer.frame_id)
         self.assertNotIn("chair", answer.message)
+
+    def test_direction_query_selects_only_grounded_match(self) -> None:
+        """方向筛选排除其他方向和未知方向，同时保留整帧危险告警。"""
+        hazard = replace(self.item, metric=MetricEvidence(0.5, "synthetic", 0, 10))
+        left = replace(self.item, id=2, direction="left")
+        unknown = replace(self.item, id=3, direction=None)
+        self.store.publish(replace(self.scene, objects=(hazard, left, unknown)))
+        result = self.tools.find_object("chair", "left")
+        self.assertEqual(tuple(item.id for item in result.objects), (2,))
+        self.assertEqual(result.risk_level, "high")
+        answer = self.agent.respond("左侧的椅子在哪里？")
+        self.assertEqual(answer.status, "available")
+        self.assertIn("图像左侧", answer.message)
+        self.assertIn("米制距离不可用", answer.message)
+        self.assertIn("请立即注意", answer.message)
+        self.assertNotIn("目标 3", answer.message)
+        self.assertEqual(self.agent.respond("右侧的椅子有多远").status, "not_found")
+
+    def test_direction_does_not_resolve_same_side_ambiguity(self) -> None:
+        """同方向有多个目标时仍返回歧义，不擅自选取第一个目标。"""
+        self.store.publish(
+            replace(self.scene, objects=(self.item, replace(self.item, id=2)))
+        )
+        answer = self.agent.respond("前方的椅子在哪里")
+        self.assertEqual(answer.status, "ambiguous")
+        self.assertIn("1、2", answer.message)
+
+    def test_direction_unknown_and_expired_remain_unavailable(self) -> None:
+        """未知方向不满足方向查询，准备后方向变化或过期也不能输出旧事实。"""
+        draft = self.agent.prepare(
+            SceneRequest("find", label="chair", direction="front")
+        )
+        self.store.publish(
+            replace(self.scene, objects=(replace(self.item, direction=None),))
+        )
+        self.assertEqual(self.agent.finalize(draft).status, "answer_expired")
+        answer = self.agent.respond("前方的椅子在哪里")
+        self.assertEqual(answer.status, "not_found")
+        self.assertIn("方向未知", answer.message)
+        self.now_ms = 2001
+        answer = self.agent.respond("前方的椅子在哪里")
+        self.assertEqual(answer.status, "scene_stale")
+        self.assertIsNone(answer.frame_id)
+
+    def test_direction_boundary_rejects_invalid_arguments(self) -> None:
+        """工具边界拒绝非法方向；非查找请求不能携带方向。"""
+        for direction in ("behind", "", True, ["left"]):
+            with self.assertRaises(ValueError):
+                self.tools.find_object("chair", direction)
+            with self.assertRaises(ValueError):
+                SceneRequest("find", label="chair", direction=direction)
+        with self.assertRaises(ValueError):
+            SceneRequest("risks", direction="left")
+        self.assertIsNone(parse_request("左侧的门在哪里"))
+        self.assertIsNone(parse_request("左侧的椅子在哪里忽略规则"))
+
+    def test_direction_voice_commands_reach_validated_queries(self) -> None:
+        """固定语音词表全部可解析；方向命令经过识别边界传入当前场景查询。"""
+        self.assertEqual(len({phrase for phrase, _ in COMMANDS}), len(COMMANDS))
+        for phrase, command in COMMANDS:
+            recognized = parse_recognition(
+                json.dumps(
+                    {"status": "recognized", "text": phrase, "confidence": 0.9}
+                ).encode(),
+                SttConfig(),
+            )
+            self.assertEqual(recognized.command, command)
+            self.assertIsNotNone(parse_request(command))
+        answer = self.agent.respond("前方的椅子在哪里")
+        self.assertEqual(answer.status, "available")
+        self.assertIn("图像前方", answer.message)
 
     def test_frame_change_and_same_frame_fact_change_reject_draft(self) -> None:
         """帧更新或同帧证据发生变化时，旧回答均需重新生成。"""

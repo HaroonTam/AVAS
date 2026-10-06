@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from app.agent.tools import ObjectFact, SceneTools, ToolResult
+from app.fusion.direction import Direction
 
 
 @dataclass(frozen=True)
@@ -12,11 +13,16 @@ class SceneRequest:
     label: str | None = None
     frame_id: str | None = None
     object_id: int | None = None
+    direction: Direction | None = None
 
     def __post_init__(self) -> None:
         """拒绝未知意图和多余参数，避免含糊请求被悄然解释。"""
         if self.intent not in {"describe", "risks", "find", "distance"}:
             raise ValueError("unsupported intent")
+        if self.direction is not None and (
+            self.intent != "find" or self.direction not in ("left", "front", "right")
+        ):
+            raise ValueError("only find accepts direction: left, front or right")
         if self.intent == "find":
             if (
                 not isinstance(self.label, str)
@@ -25,7 +31,9 @@ class SceneRequest:
                 or self.frame_id is not None
                 or self.object_id is not None
             ):
-                raise ValueError("find requires only a nonempty label")
+                raise ValueError(
+                    "find requires a nonempty label and optional direction"
+                )
         elif self.intent == "distance":
             if (
                 self.label is not None
@@ -71,6 +79,19 @@ def parse_request(text: str) -> SceneRequest | None:
         "公交车": "bus",
         "摩托车": "motorcycle",
     }
+    directions: dict[str, Direction] = {
+        "左侧的": "left",
+        "前方的": "front",
+        "右侧的": "right",
+    }
+    for prefix, direction in directions.items():
+        for suffix in ("在哪里", "有多远"):
+            if text.startswith(prefix) and text.endswith(suffix):
+                label = text[len(prefix) : -len(suffix)]
+                if label in aliases:
+                    return SceneRequest(
+                        "find", label=aliases[label], direction=direction
+                    )
     for suffix in ("在哪里", "有多远"):
         if text.endswith(suffix) and text[: -len(suffix)] in aliases:
             return SceneRequest("find", label=aliases[text[: -len(suffix)]])
@@ -117,7 +138,7 @@ class VisionAssistant:
         if request.intent == "risks":
             return self._tools.get_current_risks()
         if request.intent == "find" and request.label is not None:
-            return self._tools.find_object(request.label)
+            return self._tools.find_object(request.label, request.direction)
         if request.frame_id is not None and request.object_id is not None:
             return self._tools.get_object_distance(request.frame_id, request.object_id)
         raise ValueError("invalid request")
@@ -162,7 +183,8 @@ class VisionAssistant:
             return AssistantAnswer(
                 "unsupported_request",
                 None,
-                "请使用“描述周围”“当前风险”“寻找 椅子”或“距离 帧ID 目标ID”。",
+                "请使用“描述周围”“当前风险”“寻找 椅子”"
+                "“左侧的椅子在哪里”或“距离 帧ID 目标ID”。",
             )
         try:
             return self.finalize(self.prepare(request))
