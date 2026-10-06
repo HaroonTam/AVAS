@@ -191,8 +191,10 @@ python -m app.main --help
 
 `scripts/check.ps1` 依次运行全部合成测试、`ruff check` 与 `ruff format --check`，任一步失败返回非零。
 解释器按 `AVAS_PYTHON`、`D:\python\python.exe`、`.venv`、`python` 的顺序选择，也可用 `-Python` 指定。
-当前全量 194 项测试通过。测试临时目录建在被忽略的 `outputs/test_tmp/`
+当前全量 198 项测试通过。测试临时目录建在被忽略的 `outputs/test_tmp/`
 （见 [tests/workspace_temp.py](tests/workspace_temp.py)），不依赖系统临时目录。
+真实相机、麦克风与扬声器的首次验收按 [硬件验收协议](docs/hardware_acceptance.md) 执行；
+该协议尚未完成，因此当前仍没有任何实测硬件结论。
 检测核心单元测试只需要 NumPy，无需模型、摄像头、网络或 GPU。
 可视化测试还需要 OpenCV，缺少时会显式跳过。
 覆盖边界裁剪、无效输出、置信度阈值、设备选择、配置、失败路径以及全函数注解检查。
