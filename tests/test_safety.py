@@ -9,9 +9,9 @@ from pathlib import Path
 from app.fusion.config import FusionConfig
 from app.fusion.depth_fusion import DetectionFrame, fuse_frame
 from app.safety.config import RiskConfig, load_risk_config
-from app.safety.risk_engine import RiskAssessment, assess_scene
+from app.safety.risk_engine import RiskAssessment, WarningEvent, assess_scene
 from app.safety.scene import MetricEvidence, RiskObject, RiskScene, offline_scene
-from app.safety.warnings import WarningGate
+from app.safety.warnings import RepeatLimiter, WarningGate
 from app.vision.detector import Detection
 from tests.workspace_temp import workspace_tempdir
 
@@ -172,6 +172,7 @@ class SafetyTests(unittest.TestCase):
             ("medium_distance_m", float("nan")),
             ("freshness_ms", -1),
             ("cooldown_ms", 1.5),
+            ("degraded_cooldown_ms", -1),
             ("min_confidence", 1.1),
         ):
             with self.assertRaises(ValueError):
@@ -181,12 +182,14 @@ class SafetyTests(unittest.TestCase):
             path.write_text("[detection]\n", encoding="utf-8")
             self.assertEqual(load_risk_config(path), self.config)
             path.write_text(
-                "[risk]\nhigh_distance_m=0.8\nindependent_hazard_labels=car,bus\n",
+                "[risk]\nhigh_distance_m=0.8\nindependent_hazard_labels=car,bus\n"
+                "degraded_cooldown_ms=5000\n",
                 encoding="utf-8",
             )
             config = load_risk_config(path)
             self.assertEqual(config.high_distance_m, 0.8)
             self.assertEqual(config.independent_hazard_labels, ("car", "bus"))
+            self.assertEqual(config.degraded_cooldown_ms, 5000)
 
     def test_cooldown_escalation_and_reappearance(self) -> None:
         """重复事件去重，升级和消失后重现立即输出，边界到期允许重复。"""
@@ -230,6 +233,48 @@ class SafetyTests(unittest.TestCase):
         stale = assess_scene(self.scene, 2001, self.config)
         self.assertEqual(len(gate.select(stale, 2)), 1)
         self.assertEqual(gate.select(stale, 3), ())
+
+    def test_degraded_cooldown_is_independent(self) -> None:
+        """降级提示使用独立更长冷却；危险仍按普通冷却且升级立即输出。"""
+        degraded = assess_scene(
+            replace(self.scene, objects=(replace(self.item, metric=None),)),
+            1000,
+            self.config,
+        )
+        gate = WarningGate(3000, degraded_cooldown_ms=30_000)
+        self.assertEqual(len(gate.select(degraded, 0)), 2)
+        self.assertEqual(gate.select(degraded, 1000), ())
+        self.assertEqual(gate.select(degraded, 3001), ())
+        self.assertEqual(len(gate.select(degraded, 30_000)), 2)
+        hazard_gate = WarningGate(3000, degraded_cooldown_ms=30_000)
+        medium = self.evaluate(1.5)
+        self.assertEqual(len(hazard_gate.select(medium, 0)), 1)
+        self.assertEqual(hazard_gate.select(medium, 2999), ())
+        self.assertEqual(len(hazard_gate.select(medium, 3000)), 1)
+        with self.assertRaises(ValueError):
+            WarningGate(3000, degraded_cooldown_ms=-1)
+
+    def test_repeat_limiter_paces_identical_messages(self) -> None:
+        """不同帧的同一条提示按内容限速，等级升级立即放行，降级不绕过。"""
+        limiter = RepeatLimiter(3000)
+        event = WarningEvent(
+            ("frame", "f1", "1", "chair", "front"),
+            "high",
+            "hazard",
+            "前方近距离障碍，请立即注意。",
+        )
+        self.assertTrue(limiter.allow(event, 0))
+        second_frame = replace(event, key=("frame", "f2", "1", "chair", "front"))
+        self.assertFalse(limiter.allow(second_frame, 125))
+        self.assertFalse(limiter.allow(second_frame, 2999))
+        self.assertTrue(limiter.allow(second_frame, 3000))
+        escalating = RepeatLimiter(3000)
+        medium = replace(event, level="medium")
+        self.assertTrue(escalating.allow(medium, 0))
+        self.assertTrue(escalating.allow(second_frame, 10))
+        self.assertFalse(escalating.allow(second_frame, 20))
+        with self.assertRaises(ValueError):
+            RepeatLimiter(-1)
 
     def test_safety_modules_have_no_agent_network_or_speech_dependency(self) -> None:
         """静态检查核心仅依赖本地数据模块，不引入等待 LLM 或播放的路径。"""

@@ -20,7 +20,7 @@ from app.fusion.depth_fusion import DetectionFrame, Observation, fuse_frame
 from app.safety.config import RiskConfig, load_risk_config
 from app.safety.risk_engine import RiskAssessment, assess_scene
 from app.safety.scene import RiskObject, RiskScene
-from app.safety.warnings import WarningGate
+from app.safety.warnings import RepeatLimiter, WarningGate
 from app.scene_store import SceneStore
 from app.speech.stt import SttConfig, WindowsCommandRecognizer
 from app.speech.tts import SpeechMessage, SpeechWorker, WindowsSpeechBackend
@@ -114,14 +114,29 @@ def dispatch_warnings(
     gate: WarningGate,
     speech: SpeechWorker | None,
     expires_at: float,
+    *,
+    repeat_limiter: RepeatLimiter | None = None,
 ) -> int:
-    """先记录告警再提交本地播放；完全不调用或等待 Agent，返回接收事件数。"""
-    events = gate.select(assessment, int(monotonic() * 1000))
+    """先记录告警再提交本地播放；完全不调用或等待 Agent，返回接收事件数。
+
+    传入 repeat_limiter 时限制同一条文本的重复播放节奏；未传入时不限制，
+    供合成测试与一次性调度使用。事件仍照常记录日志。
+    """
+    now_ms = int(monotonic() * 1000)
+    events = gate.select(assessment, now_ms)
     accepted = 0
     for event in events:
         logging.warning("%s: %s", event.kind, event.message)
         if speech is not None:
-            priority = 2 if event.level == "high" else 1
+            if repeat_limiter is not None and not repeat_limiter.allow(event, now_ms):
+                continue
+            # 危险告警保持可抢占优先级；降级提示降到最低，避免持续未知状态刷屏。
+            if event.level == "high":
+                priority = 2
+            elif event.kind == "degraded":
+                priority = 0
+            else:
+                priority = 1
             if speech.submit(SpeechMessage(event.message, priority, expires_at)):
                 accepted += 1
     return accepted
@@ -192,7 +207,11 @@ def main(
             settings.getint("camera", "height", fallback=480),
             settings.getfloat("camera", "timeout_s", fallback=3),
         )
-        gate = WarningGate(risk.cooldown_ms)
+        gate = WarningGate(
+            risk.cooldown_ms, degraded_cooldown_ms=risk.degraded_cooldown_ms
+        )
+        # 无跟踪器时事件身份含帧 ID；用内容节奏限制同一条提示的重复播放。
+        repeat_limiter = RepeatLimiter(risk.cooldown_ms)
         if not args.no_speech:
             try:
                 speech = SpeechWorker(
@@ -256,7 +275,13 @@ def main(
                 assessment = assess_scene(invalid, time_ns() // 1_000_000, risk)
                 if speech is not None:
                     speech.cancel()
-                dispatch_warnings(assessment, gate, speech, monotonic() + 5)
+                dispatch_warnings(
+                    assessment,
+                    gate,
+                    speech,
+                    monotonic() + 5,
+                    repeat_limiter=repeat_limiter,
+                )
                 print(
                     json.dumps(
                         {
@@ -290,7 +315,9 @@ def main(
             )
             if result.depth_status in {"unavailable", "rejected"}:
                 failed = True
-            accepted = dispatch_warnings(assessment, gate, speech, expiry)
+            accepted = dispatch_warnings(
+                assessment, gate, speech, expiry, repeat_limiter=repeat_limiter
+            )
             result.latencies_ms["capture_to_dispatch"] = (
                 monotonic() - frame.captured_monotonic
             ) * 1000

@@ -13,6 +13,8 @@ class RiskConfig:
     min_confidence: float = 0.5
     freshness_ms: int = 1000
     cooldown_ms: int = 3000
+    # 降级提示（未知、距离不可用等）使用更长冷却，避免持续未知状态反复播报。
+    degraded_cooldown_ms: int = 30_000
     obstacle_labels: tuple[str, ...] = (
         "person",
         "chair",
@@ -33,7 +35,7 @@ class RiskConfig:
             raise ValueError("risk distances must satisfy 0 < high < medium")
         if not isfinite(self.min_confidence) or not 0 <= self.min_confidence <= 1:
             raise ValueError("risk min_confidence must be within [0, 1]")
-        for value in (self.freshness_ms, self.cooldown_ms):
+        for value in (self.freshness_ms, self.cooldown_ms, self.degraded_cooldown_ms):
             if type(value) is not int or value < 0:
                 raise ValueError("risk times must be nonnegative integer milliseconds")
         for labels in (self.obstacle_labels, self.independent_hazard_labels):
@@ -60,6 +62,9 @@ def load_risk_config(path: Path) -> RiskConfig:
         min_confidence=section.getfloat("min_confidence", defaults.min_confidence),
         freshness_ms=section.getint("freshness_ms", defaults.freshness_ms),
         cooldown_ms=section.getint("cooldown_ms", defaults.cooldown_ms),
+        degraded_cooldown_ms=section.getint(
+            "degraded_cooldown_ms", defaults.degraded_cooldown_ms
+        ),
         obstacle_labels=tuple(
             part.strip()
             for part in section.get(

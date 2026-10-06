@@ -25,7 +25,7 @@ from app.live import PerceptionPipeline, dispatch_warnings, main
 from app.safety.config import RiskConfig
 from app.safety.risk_engine import RiskAssessment, assess_scene
 from app.safety.scene import MetricEvidence, RiskObject, RiskScene
-from app.safety.warnings import WarningGate
+from app.safety.warnings import RepeatLimiter, WarningGate
 from app.scene_store import SceneStore
 from app.speech.tts import (
     SpeechHandle,
@@ -157,6 +157,52 @@ class LiveTests(unittest.TestCase):
         finally:
             worker.close()
         self.assertTrue(backend.handles[-1].stopped.is_set())
+
+    def test_degraded_notice_uses_lowest_speech_priority(self) -> None:
+        """持续未知只产生降级提示，以最低优先级提交，不抢占危险或普通回答。"""
+        speech = MagicMock()
+        speech.submit.return_value = True
+        item = RiskObject(1, "f", "chair", 0.9, "front")
+        assessment = assess_scene(
+            RiskScene("f", 1000, "live", True, (item,)), 1000, RiskConfig()
+        )
+        with self.assertLogs(level="WARNING"):
+            accepted = dispatch_warnings(
+                assessment, WarningGate(3000), speech, monotonic() + 10
+            )
+        self.assertEqual(accepted, 2)
+        priorities = [call.args[0].priority for call in speech.submit.call_args_list]
+        self.assertEqual(priorities, [0, 0])
+
+    def test_frame_local_hazard_keys_are_paced_by_content(self) -> None:
+        """无跟踪器时不同帧的高风险提示按内容限速，避免占满语音队列。"""
+        speech = MagicMock()
+        speech.submit.return_value = True
+        limiter = RepeatLimiter(3000)
+        accepted: list[int] = []
+        for frame_id in ("f1", "f2", "f3"):
+            item = RiskObject(
+                1,
+                frame_id,
+                "chair",
+                0.9,
+                "front",
+                MetricEvidence(0.5, "synthetic-only", 0, 10),
+            )
+            assessment = assess_scene(
+                RiskScene(frame_id, 1000, "live", True, (item,)), 1000, RiskConfig()
+            )
+            with self.assertLogs(level="WARNING"):
+                accepted.append(
+                    dispatch_warnings(
+                        assessment,
+                        WarningGate(3000),
+                        speech,
+                        monotonic() + 10,
+                        repeat_limiter=limiter,
+                    )
+                )
+        self.assertEqual(accepted, [1, 0, 0])
 
     def test_expired_input_and_queue_priority(self) -> None:
         """过期内容拒绝；低优先级不能挤掉等待的紧急告警。"""
@@ -374,8 +420,11 @@ class LiveTests(unittest.TestCase):
             gate: WarningGate,
             speech: SpeechWorker | None,
             expires_at: float,
+            *,
+            repeat_limiter: RepeatLimiter | None = None,
         ) -> int:
-            """记录告警提交位置，不访问音频设备。"""
+            """记录告警提交位置并核对内容限速已接入，不访问音频设备。"""
+            self.assertIsNotNone(repeat_limiter)
             order.append("warning")
             return 0
 
