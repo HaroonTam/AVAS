@@ -1,5 +1,142 @@
 # 实时阶段完成记录
 
+## 真实硬件验收（Phase 1.2，2026-10-07，修订 84cad7f）
+
+首次在真实相机、扬声器、麦克风上执行 [硬件验收协议](hardware_acceptance.md) 的 A/B/C/D。
+验收期间代码未改动，工作区只有未跟踪的 `.idea/` 与两个临时配置副本（见「配置差异」）。
+原始逐帧日志全部保留在被忽略的 `outputs/`，不随本记录提交。
+
+- 日期时间：2026-10-07 00:50–01:35（GMT+8）。
+- 解释器与设备：`D:\python\python.exe`，Python 3.12.9，torch 2.7.0+cu118 / CUDA 11.8 /
+  NVIDIA GeForce RTX 4060 Laptop GPU，ultralytics 8.4.37，transformers 5.6.2，
+  numpy 2.2.6，opencv 4.12.0；摄像头 HP True Vision FHD Camera（`[camera] index = 0`）；
+  音频端点 `扬声器 (OMEN Cam & Voice)`、`Speaker (Realtek(R) Audio)`、
+  `Headphone (Realtek(R) Audio)`、`麦克风 (OMEN Cam & Voice)`、
+  `麦克风阵列 (Intel 智音)` 状态均 OK；TTS/STT 走 Windows 默认端点，
+  **默认设备名未单独确认**。
+- 配置差异：`configs/system.hw.ini`（相对 `configs/system.ini` 仅
+  `camera_orientation = unknown`）用于 A/B/C；`configs/system.hw_d.ini`
+  （另把 `[depth] model_dir` 指向不存在目录）仅用于 D3。两份副本验收后删除，
+  仓库默认配置未改动。
+- 复现脚本（均在忽略目录，不提交）：`outputs/acceptance_stats.py`（JSONL 编码自适应统计）、
+  `outputs/tts_probe.py`（实测朗读时长）、`outputs/speech_worker_probe.py`
+  （超时切断与故障后播放）。
+- §0 前置检查全部通过：`app.main --help`、`app.live --help` 退出码 0；
+  `powershell -NoProfile -File scripts/check.ps1` 在用户终端 198 项测试、Ruff 全绿、
+  53 文件格式一致；已装 3 个 zh-* 音色（首选 Microsoft Huihui Desktop，zh-CN），
+  用户听到完整中文语句；交互终端 `sys.stdin.isatty()` 为 True；
+  `--max-frames 5` 探针 5 行 JSON、退出码 0、`depth_status=available`。
+  受限代理会话内原文形态会被本机执行策略拒绝（`not digitally signed`），
+  加 `-ExecutionPolicy Bypass` 可通过；这是代理会话的环境限制，不是仓库缺陷。
+
+### A 静音链路（两次独立 300 帧）
+
+- 记录：`outputs/live_A_20261007.jsonl`（该次退出码未采集）、
+  `outputs/live_A2_20261007.jsonl`（**退出码 0**）。两次均 300 行、无解析失败、时长 25.6 s。
+- 通过判据：无异常退出；`depth_status=available` 300/300；无持续耗时增长趋势。
+- `current_scene`：两次都是 true 299 / false 1。A 的过期帧是第 208 帧，A2 是第 0 帧；
+  分桶（每 50 帧）`capture_to_dispatch` 均值 A 为 134/138/118/126/172/132 ms，
+  第 5 桶偏高由第 208 帧单次卡顿造成（detection 828 ms、depth 375 ms、
+  `capture_to_dispatch` 1515 ms）；A2 只有首帧预热偏高（1140 ms）。**卡顿原因未定位。**
+- 耗时 mean/p50/p95（A / A2，ms）：detection 17.40/15/31 与 17.93/16/31；
+  depth 65.46/62/79 与 64.55/63/78；fusion 1.09/≈0/15 与 1.26/≈0/16；
+  risk 0.05/≈0/≈0；`capture_to_dispatch` 136.87/125/172 与 138.74/125/172。
+- 观测：A 平均 1.17、最多 4（person 310、chair 25、tv 17）；A2 平均 1.10、最多 2
+  （person 299、chair 30）；**方向全部 null**（`camera_orientation=unknown`）；
+  事件 degraded 599、hazard 0。平均采集间隔 85.7 ms（采集节奏，不是 FPS 结论）。
+
+### B 有声告警（800 帧；协议为 300 帧，见偏离）
+
+- 记录：`outputs/live_B_20261007.jsonl`，800 行、无解析失败，时长 54.5 s，
+  处理速率约 14.7 帧/秒；该次退出码未采集。`current_scene` true 800/800，
+  `depth_status` available 800/800，`speech_status` worker_running 800/800。
+- `speech_accepted`：798 帧为 0，仅第 0 帧与第 444 帧（**+30.7 s**）各为 2；
+  两帧事件均为 degraded `环境风险无法完整评估，请谨慎。` 与 `距离信息不可用。`；
+  事件合计 degraded 1600、**hazard 0**。
+- 偏离：协议写 300 帧（约 26 s），不足以覆盖两个 `degraded_cooldown_ms=30000` 周期，
+  故延长到 800 帧；已在上一轮说明。
+- 听感（用户如实描述）：开头与约 30 秒后各听到一次“环境风险无法完整评估，请谨慎。”，
+  **两次都没有听到“距离信息不可用。”**；无破音、无截断；主观估计间隔约 20 秒，
+  实测提交间隔 30.7 秒。
+- **失败项 B-1（每次提交 2 条、只播出 1 条）**：告警消息有效期取自
+  `frame.captured_monotonic + freshness_ms/1000`（约 1 s），而第一条 16 字符提示按实测语速
+  约需 5.2 s；第二条在首条播放期间被 `SpeechWorker` 的过期清理丢弃。因此可听提示实际是
+  **每 30 秒 1 条**，而不是此前用合成时钟推算的 2 条。`speech_accepted` 只表示提交，
+  日志与听感并不矛盾。
+- 提交到可听起声的延迟：**未测量**（需录音对齐时间戳）。
+
+### C 交互与语音输入（`--console --voice-input --speak-replies`）
+
+- console 模式不输出逐帧 JSON；依据用户终端转录与两个探针脚本。
+- 逐条结果：`帮助` → 固定用法说明（`[reply_speech:feedback_queued]`）；
+  `描述周围` → `目标 1（类别 '人'）：方向未知，米制距离不可用。检测结果不能证明道路安全。`；
+  `前方有什么` → 未检测到该方向目标并明确不代表安全、未知方向目标未纳入摘要；
+  `当前风险` → 环境风险无法完整评估＋距离信息不可用；`寻找 椅子` → 命中目标 2（椅子，方向未知）；
+  再次查询 → `ambiguous`，2 个匹配并要求用帧 ID＋目标 ID 明确选择；
+  `左侧的椅子在哪里` → `not_found` 并说明未知方向目标无法定位；
+  `listen` → `[stt:recognized] 寻找 椅子`（**首次真机中文语音识别成功**）；
+  `cancel` → 在识别返回之后才输入，被判 `unsupported_request`，**取消路径未命中、未验证**；
+  `quit` → 退出。帧 ID 序列 `…:1442 → …:4800` 递增，回答均引用当时当前帧，
+  未出现旧帧事实，也未出现编造的方向或米制距离。
+- 该次退出码未采集；退出后摄像头与麦克风是否释放未直接验证。
+- **失败项 C-1（长文本被固定超时截断并使语音报告永久不可用）**：
+  `outputs/tts_probe.py` 实测帮助全文 150 字符需 **39.47 s**（3.80 字符/秒）、
+  8 字符短句 3.17 s，解出本机 `时长 ≈ 1.13 s + 0.256 s/字符`，而 `[speech] timeout_s = 15`。
+  `outputs/speech_worker_probe.py` 实测帮助在第 **15.03 s** 被 `_fail()` 终止
+  （`worker.error='spoken alerts unavailable: RuntimeError'`），用户确认帮助说到一半被切断。
+  `SpeechWorker._error` 一经置位不再复位，之后所有回答显示 `speech_unavailable`，
+  `app.live` 因此 `failed=True`（预期退出码 2）。
+- 同根因的第二效应：故障置位后提交的 8 字符短句**仍然被播出**
+  （探针实测 3.16 s，用户听到）。即故障影响的是**报告与退出码**，播放通路并未停止。
+
+### D 故障路径
+
+- **D3 深度模型缺失**（`configs/system.hw_d.ini`，`--no-speech --max-frames 20`）：
+  `outputs/live_D3_20261007.jsonl` 20 行、**退出码 2**；`depth_status=unavailable` 20/20；
+  观测保留（person 20、chair 4）；观测字段 `distance_status="metric_unavailable"`、
+  `distance_m=null`、`direction=null` 且 `direction_status="camera_orientation_unknown"`、
+  `depth.status="depth_unavailable"`、`calibration_status="not_calibrated"`；
+  stderr `Depth unavailable; retaining detection: Depth model missing: …`。
+  本配置方向本就未知，因此这里证明的是“检测保留、方向如实未知、未伪造”，
+  而不是“方向推断仍工作”。
+- **D2 声音不可用**（禁用播放设备，`--max-frames 30`）：
+  `outputs/live_D2_20261007.jsonl` 30 行、**退出码 2**；
+  stderr `Spoken alerts unavailable: local TTS failed or timed out; …`；
+  `speech_status` 前 6 帧 `worker_running`、之后 24 帧 `unavailable`；
+  `current_scene` true 30/30、`depth_status` available 30/30、degraded 事件 60 条，
+  即感知与事件生成未停止。
+- **D1 相机失效**（运行中拔掉摄像头，`--max-frames 0`）：
+  `outputs/live_D1_20261007.jsonl` 78 正常帧（6.7 s）＋ 1 故障行、**退出码 2**；
+  stderr OpenCV `can't grab frame` → `Current scene invalidated: camera unavailable`；
+  故障行 `scene.frame_id="camera-unavailable"`、`valid=false`、`objects=[]`、
+  `safety.status="scene_invalid"`，事件 `degraded/当前环境信息不可用，请谨慎。`；
+  未再输出旧帧对象。
+- **失败项 D-1（结束提示排空等待过短）**：同一次运行 stderr 末尾出现
+  `ERROR: Final unavailable notification did not finish`。`app/live.py` 只等
+  `speech.wait_idle(5)`，而该结束提示 16 字符按实测语速约需 5.2 s，
+  因此这条 ERROR 是必然出现的，且随后 `speech.close()` 会掐断尚未播完的结束提示。
+
+### 结论、失败与未验证项
+
+- 通过：§0 全部；A 两次独立运行；B 的降级冷却节奏（实测提交间隔 30.7 s，无刷屏）
+  与日志一致性；C 的回答事实约束、方向/距离如实未知、单次 STT、退出；
+  D3/D2 的期望行为；D1 的场景失效与不引用旧事实。
+- 失败（都属语音可听性与报告，未影响感知、融合或风险计算）：
+  B-1 每次降级窗口提交 2 条、可听 1 条；C-1 150 字符帮助超过 `timeout_s=15`
+  被截断并使 `_error` 永久置位；D-1 结束提示的 5 秒排空等待短于实际播放时长。
+  三项同源：**固定时间常数与实测中文语速（1.13 s + 0.256 s/字符）不匹配**。
+- 后续修复（在本记录之后单独提交，附合成测试并同步 `docs/live_pipeline.md`）：
+  按文本长度计算单条播放上限（配置值降为下限、上限 90 s）；成功播完清除瞬时故障标记；
+  降级提示改用 `[speech] degraded_queue_horizon_s=8`；结束提示排空等待按文本长度计算。
+  修复只改语音节奏与报告，不改风险规则、事件证据与米制语义。
+- 未测量/未验证：可听告警延迟（提交→起声）；B 与 C 的退出码；
+  退出后摄像头与麦克风句柄释放；无米制配置下真机不产生 hazard 事件，
+  因此高风险告警的真机可听抢占未验证；摄像头 FPS、端到端帧率、内存与 GPU 占用；
+  模型识别准确率与米制距离误差（未标定）；`cancel` 取消路径；
+  有其它播放设备时的静默成功分支。
+- 限制声明：本结果**不代表行走安全性、模型识别准确率或米制距离误差**；
+  `capture_to_dispatch` 与 `speech_accepted` 都不是可听告警延迟。
+
 ## 最新接续：可朗读的使用帮助（2026-10-07）
 
 - 支持 `帮助`／`使用帮助`／`help` 文字命令，以及固定 STT 短语“使用帮助”。
