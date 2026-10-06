@@ -11,11 +11,15 @@ from time import monotonic
 from unittest.mock import MagicMock, patch
 
 from app.agent.console import ConsoleWorker
+from app.agent.spoken_reply import SpokenReply
+from app.agent.tools import SceneTools
+from app.agent.vision_agent import VisionAssistant
 from app.live import dispatch_warnings, main
 from app.safety.config import RiskConfig
 from app.safety.risk_engine import assess_scene
 from app.safety.scene import MetricEvidence, RiskObject, RiskScene
 from app.safety.warnings import WarningGate
+from app.scene_store import SceneStore
 from app.speech.stt import (
     COMMANDS,
     Recognition,
@@ -222,6 +226,38 @@ class SttTests(unittest.TestCase):
         self.assertTrue(worker.finished.wait(1))
         worker.close()
         agent.respond.assert_called_once_with("寻找 椅子")
+
+    def test_console_stt_failures_submit_fixed_spoken_feedback(self) -> None:
+        """模拟识别失败经过真实控制台和语音适配器，仅提交固定低优先级提示。"""
+        for status in ("unrecognized", "timeout", "unavailable", "cancelled"):
+            with self.subTest(status=status):
+                store = SceneStore(RiskConfig())
+                agent = VisionAssistant(SceneTools(store))
+                speech, recognizer = MagicMock(), MagicMock()
+                speech.error = None
+                recognizer.recognize.return_value = Recognition(status)
+                output: list[str] = []
+                speaker = SpokenReply(agent, store, speech)
+                worker = ConsoleWorker(
+                    agent,
+                    ScriptedInput(["听取", "quit"]),
+                    output.append,
+                    recognizer=recognizer,
+                    spoken_reply=speaker,
+                )
+                worker.start()
+                try:
+                    self.assertTrue(worker.finished.wait(1))
+                finally:
+                    worker.close()
+                self.assertIsNone(worker.error)
+                speech.submit.assert_called_once()
+                message = speech.submit.call_args.args[0]
+                self.assertEqual(message.priority, 0)
+                self.assertIsNone(message.scene_lease)
+                self.assertIn("本次", message.text)
+                self.assertIn("reply_speech:feedback_queued", "".join(output))
+                self.assertTrue(worker.exit_requested.is_set())
 
     def test_waiting_for_stt_does_not_block_warning_and_close(self) -> None:
         """识别挂起期间告警照常提交，关闭事件停止听取且丢弃迟到命令。"""

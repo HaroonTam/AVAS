@@ -140,6 +140,9 @@ class ConsoleWorker:
                         }
                         message = messages.get(recognition.status, "输入不可用。")
                         self._emit(f"[stt:{recognition.status}] {message}\n> ")
+                        if self._spoken_reply is not None:
+                            self._spoken_reply.notify(f"stt:{recognition.status}")
+                            self._emit(f"[reply_speech:{self._spoken_reply.status}]\n")
                         continue
                     text = recognition.command
                     self._emit(f"[stt:recognized] {text}\n")

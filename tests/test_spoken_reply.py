@@ -132,13 +132,15 @@ class SpokenReplyTests(unittest.TestCase):
         speech.submit.assert_not_called()
         self.assertEqual(speaker.status, "scene_unavailable_or_changed")
 
-    def test_unknown_request_and_long_answer_are_not_spoken(self) -> None:
-        """无场景依据和超长回答只保留文字，不截断可能重要的风险提示。"""
+    def test_unknown_request_feedback_and_long_answer_rejection(self) -> None:
+        """未知请求使用固定反馈，超长事实回答不截断可能重要的风险提示。"""
         speech = MagicMock()
         speech.error = None
         speaker = SpokenReply(self.agent, self.store, speech)
         speaker.respond("未知指令")
-        speech.submit.assert_not_called()
+        self.assertEqual(speaker.status, "feedback_queued")
+        self.assertIn("本次请求不支持", speech.submit.call_args.args[0].text)
+        speech.reset_mock()
         self.store.publish(
             replace(
                 self.scene, objects=(replace(self.scene.objects[0], label="x" * 400),)
@@ -147,6 +149,100 @@ class SpokenReplyTests(unittest.TestCase):
         speaker.respond("描述周围")
         self.assertEqual(speaker.status, "text_too_long")
         speech.submit.assert_not_called()
+
+    def test_feedback_uses_whitelist_not_answer_body(self) -> None:
+        """无帧错误状态只产生固定提示，不能借错误正文播出伪造场景或自由文本。"""
+        speech = MagicMock()
+        speech.error = None
+        speaker = SpokenReply(self.agent, self.store, speech)
+        for status in (
+            "unsupported_request",
+            "tools_unavailable",
+            "scene_unavailable",
+            "scene_invalid",
+            "scene_stale",
+            "scene_changed",
+            "answer_expired",
+            "frame_mismatch",
+        ):
+            with patch.object(
+                self.agent,
+                "respond",
+                return_value=AssistantAnswer(status, None, "伪造：前方一米安全"),
+            ):
+                speaker.respond("合成请求")
+            message = speech.submit.call_args.args[0]
+            self.assertNotIn("伪造", message.text)
+            self.assertNotIn("一米", message.text)
+            self.assertEqual(message.priority, 0)
+            self.assertIsNone(message.scene_lease)
+        speech.reset_mock()
+        speaker.notify("伪造：前方一米安全")
+        self.assertEqual(speaker.status, "feedback_unsupported")
+        with patch.object(
+            self.agent,
+            "respond",
+            return_value=AssistantAnswer("available", None, "伪造事实"),
+        ):
+            speaker.respond("寻找 椅子")
+        speech.submit.assert_not_called()
+
+    def test_feedback_without_scene_is_preemptible(self) -> None:
+        """无场景也能反馈本次失败；紧急告警仍抢占模拟语音。"""
+        self.store.invalidate()
+        backend = FakeSpeech()
+        worker = SpeechWorker(backend)
+        try:
+            speaker = SpokenReply(self.agent, self.store, worker)
+            answer = speaker.respond("描述周围")
+            self.assertIsNone(answer.frame_id)
+            self.assertEqual(speaker.status, "feedback_queued")
+            self.assertTrue(backend.first.wait(1))
+            self.assertIn("本次查询", backend.messages[0])
+            worker.submit(SpeechMessage("紧急告警", 2, monotonic() + 5))
+            self.assertTrue(backend.second.wait(1))
+            self.assertTrue(backend.handles[0].stopped.is_set())
+        finally:
+            worker.close()
+
+    def test_feedback_expires_while_waiting_for_warning(self) -> None:
+        """反馈等待告警时到期就丢弃，不依赖当前场景是否恢复。"""
+        backend = FakeSpeech()
+        worker = SpeechWorker(backend)
+        try:
+            worker.submit(SpeechMessage("先播告警", 2, monotonic() + 5))
+            self.assertTrue(backend.first.wait(1))
+            speaker = SpokenReply(self.agent, self.store, worker)
+            with patch(
+                "app.agent.spoken_reply.monotonic", return_value=monotonic() - 9.5
+            ):
+                speaker.notify("stt:timeout")
+            self.assertEqual(speaker.status, "feedback_queued")
+            with patch("app.speech.tts.monotonic", return_value=monotonic() + 1):
+                backend.handles[0].stop()
+                self.assertTrue(worker.wait_idle(1))
+            self.assertEqual(backend.messages, ["先播告警"])
+        finally:
+            worker.close()
+
+    def test_feedback_backend_queue_and_closed_status(self) -> None:
+        """反馈复用故障和满队列状态，关闭后不再提交，也不取消告警。"""
+        speech = MagicMock()
+        speaker = SpokenReply(self.agent, self.store, speech)
+        speech.error = "synthetic failure"
+        speaker.notify("stt:unavailable")
+        self.assertEqual(speaker.status, "speech_unavailable")
+        speech.submit.assert_not_called()
+        speech.error = None
+        speech.submit.return_value = False
+        speaker.notify("stt:timeout")
+        self.assertEqual(speaker.status, "queue_rejected")
+        speech.reset_mock()
+        speaker.close()
+        speaker.notify("stt:cancelled")
+        self.assertEqual(speaker.status, "closed")
+        speech.submit.assert_not_called()
+        speech.cancel.assert_not_called()
 
     def test_speech_failure_and_full_queue_are_visible(self) -> None:
         """语音后端错误和队列拒绝有明确状态，不冒充已经发声。"""
