@@ -8,14 +8,17 @@
 在本协议记录完成之前，不得声称行走安全、识别准确率、摄像头 FPS 或可听告警延迟。
 首次执行记录见 [实时阶段完成记录](development_checkpoint.md) 的
 「真实硬件验收（Phase 1.2，2026-10-07，修订 84cad7f）」一节：A/B/C/D 已全部执行，
-其中有判据未通过（语音可听性与报告共 3 项）且仍有未测量项，上述禁止声明范围不变。
+当时有判据未通过（语音可听性与报告共 3 项）；其后的「真机复验与验收收尾」一节记录了
+修复与复验结果——B-1、C-1 已真机复验通过，取消与摄像头释放判据已补齐，
+D-1 只有合成测试，高风险告警抢占在无米制标定下不具备验收条件。
+第 7–8 行的禁止声明范围不变。
 
 ## 0. 前置检查（缺一即中止）
 
 | 检查 | 方法 | 通过条件 |
 | --- | --- | --- |
 | 解释器与依赖 | `D:\python\python.exe -m app.main --help` | 打印用法，无 ImportError |
-| 合成基线 | `powershell -NoProfile -File scripts/check.ps1` | 当前 203 项测试通过、Ruff 全绿 |
+| 合成基线 | `powershell -NoProfile -File scripts/check.ps1` | 当前 204 项测试通过、Ruff 全绿 |
 | 中文语音 | 见 `[speech]`；系统需已安装并启用至少一个 zh-* 音色 | 能听到合成中文 |
 | 摄像头 | 确认 `[camera] index` 与实际设备一致 | `--max-frames 5` 能读到帧 |
 | 安装朝向 | `[fusion] camera_orientation` | 已知前向填 `forward`，否则必须填 `unknown` |

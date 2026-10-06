@@ -191,7 +191,7 @@ python -m app.main --help
 
 `scripts/check.ps1` 依次运行全部合成测试、`ruff check` 与 `ruff format --check`，任一步失败返回非零。
 解释器按 `AVAS_PYTHON`、`D:\python\python.exe`、`.venv`、`python` 的顺序选择，也可用 `-Python` 指定。
-当前全量 203 项测试通过。测试临时目录建在被忽略的 `outputs/test_tmp/`
+当前全量 204 项测试通过。测试临时目录建在被忽略的 `outputs/test_tmp/`
 （见 [tests/workspace_temp.py](tests/workspace_temp.py)），不依赖系统临时目录。
 真实相机、麦克风与扬声器的首次验收已按 [硬件验收协议](docs/hardware_acceptance.md) 执行，
 A/B/C/D 的实测、失败项与未测量项见 [实时阶段完成记录](docs/development_checkpoint.md)；
