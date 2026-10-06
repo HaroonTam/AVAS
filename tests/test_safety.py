@@ -2,7 +2,6 @@
 
 import ast
 import json
-import tempfile
 import unittest
 from dataclasses import asdict, replace
 from pathlib import Path
@@ -14,6 +13,7 @@ from app.safety.risk_engine import RiskAssessment, assess_scene
 from app.safety.scene import MetricEvidence, RiskObject, RiskScene, offline_scene
 from app.safety.warnings import WarningGate
 from app.vision.detector import Detection
+from tests.workspace_temp import workspace_tempdir
 
 
 class SafetyTests(unittest.TestCase):
@@ -176,7 +176,7 @@ class SafetyTests(unittest.TestCase):
         ):
             with self.assertRaises(ValueError):
                 replace(self.config, **{field: value})
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             path = Path(directory) / "config.ini"
             path.write_text("[detection]\n", encoding="utf-8")
             self.assertEqual(load_risk_config(path), self.config)

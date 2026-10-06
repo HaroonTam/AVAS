@@ -12,6 +12,7 @@
 已实现带时效校验的单帧场景存储及五个只读 Agent 场景工具。
 已新增本地受限文字交互和输出前事实复核，可处理明确的中文查询命令。
 已接入可选 Windows 本地受限命令 STT，需逐次显式触发听取。
+已补充按图像方向查找与摘要、多目标候选方向说明、中文类别显示、听取期间取消／退出和固定用法帮助。
 米制标定、LLM 交互 Agent 尚未实现；相机、语音输入输出尚未完成真实硬件验证。
 当前仍为研究原型，不能视为经过验证的行走辅助。离线图片不作为当前场景。
 
@@ -24,6 +25,7 @@ D:\python\python.exe -m app.demo
 ```
 
 该入口不打开摄像头、不加载模型或播放声音；`--json` 输出带合成标识的机器可读报告。
+报告含 6 项场景用例和 5 项合成控制台交互用例（取消、低分反馈、方向摘要、候选说明、关闭）。
 使用固定测试输入验证融合、风险、查询和模拟语音通路，不代表真实性能或安全性。
 详见 [无硬件演示说明](docs/synthetic_demo.md)。
 
@@ -159,8 +161,11 @@ PyCharm 设置模块 `app.live`、工作目录 `$PROJECT_DIR$`，参数 `--max-f
 实时告警先独立提交，之后才发布查询场景；相机故障和退出清空当前场景。
 目前是本地工具 API，未接入外部 LLM；本地受限 STT 可作为命令输入。
 接口与后续接入边界见 [Agent 工具说明](docs/agent_tools.md)。
-`VisionAssistant.respond(text)` 提供确定性文字接口，支持查询环境、风险和目标。
-回答草稿输出前重新核对事实与时效；已提供 Windows 文字控制台和可选普通回答 TTS。
+`VisionAssistant.respond(text)` 提供确定性文字接口，支持查询环境、风险、目标和图像方向。
+`find_object`／`describe_surroundings` 接受可选方向过滤；多目标消歧会列出候选方向与帧内 ID。
+回答草稿输出前重新核对事实与时效；类别显示与查询别名共用 `app/agent/labels.py` 的固定映射。
+输入 `帮助` 可获得无场景事实的固定用法说明；听取期间可键盘 `cancel`／`取消`。
+已提供 Windows 文字控制台和可选普通回答 TTS。
 显式运行 `D:\python\python.exe -m app.live --console --no-speech` 可在摄像头运行时输入请求。
 该命令会开启真实摄像头；输入 `quit` 退出，控制台模式隐藏逐帧 JSON。
 需要普通回答朗读时显式运行 `D:\python\python.exe -m app.live --console --speak-replies`。
@@ -177,10 +182,15 @@ PyCharm 设置模块 `app.live`、工作目录 `$PROJECT_DIR$`，参数 `--max-f
 图片保存在被 Git 忽略的 `data/raw/test_images/`，不随代码提交。
 
 ```powershell
+powershell -NoProfile -File scripts/check.ps1
 python -m unittest discover -s tests -v
 python -m app.main --help
 ```
 
+`scripts/check.ps1` 依次运行全部合成测试、`ruff check` 与 `ruff format --check`，任一步失败返回非零。
+解释器按 `AVAS_PYTHON`、`D:\python\python.exe`、`.venv`、`python` 的顺序选择，也可用 `-Python` 指定。
+当前全量 194 项测试通过。测试临时目录建在被忽略的 `outputs/test_tmp/`
+（见 [tests/workspace_temp.py](tests/workspace_temp.py)），不依赖系统临时目录。
 检测核心单元测试只需要 NumPy，无需模型、摄像头、网络或 GPU。
 可视化测试还需要 OpenCV，缺少时会显式跳过。
 覆盖边界裁剪、无效输出、置信度阈值、设备选择、配置、失败路径以及全函数注解检查。

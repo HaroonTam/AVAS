@@ -2,7 +2,6 @@
 
 import io
 import json
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -25,6 +24,7 @@ from app.safety.config import RiskConfig
 from app.vision.depth_estimator import RelativeDepth
 from app.vision.detector import Image
 from tests.test_live import FakeDetector
+from tests.workspace_temp import workspace_tempdir
 
 
 class FakeDepth:
@@ -148,7 +148,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_output_is_exclusive_and_bad_json_creates_no_file(self) -> None:
         """已有结果不覆盖；序列化失败不留下貌似完整的报告文件。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             path = Path(directory) / "report.json"
             save_report({"value": 1}, path)
             with self.assertRaises(FileExistsError):
@@ -161,7 +161,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_existing_output_stops_before_loading_models(self) -> None:
         """CLI 预先拒绝旧路径，避免无意义模型初始化和覆盖旧实验。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             path = Path(directory) / "report.json"
             path.write_text("original", encoding="utf-8")
             with (
@@ -176,7 +176,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_cli_report_contains_protocol_hashes_and_sample_count(self) -> None:
         """模拟模型和解码器验证完整报告元数据，不读取真实权重或 GPU。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             root = Path(directory)
             image, weights, output = (
                 root / "image.jpg",
@@ -226,7 +226,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_multi_image_report_order_warmup_and_pooled_statistics(self) -> None:
         """验证异尺寸输入、逐图预热、样本归属及合并分位数而非分位数平均。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             root = Path(directory)
             paths = [root / "first.jpg", root / "second.jpg"]
             for index, path in enumerate(paths):
@@ -295,7 +295,7 @@ class BenchmarkTests(unittest.TestCase):
 
     def test_multi_image_invalid_input_and_failure_save_no_report(self) -> None:
         """重复路径、解码失败及中途推理故障均不能保存部分成功报告。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             root = Path(directory)
             first, second = root / "a.jpg", root / "b.jpg"
             first.write_bytes(b"first")

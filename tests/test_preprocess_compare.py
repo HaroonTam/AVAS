@@ -2,7 +2,6 @@
 
 import io
 import json
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -12,6 +11,7 @@ import numpy as np
 
 from app.preprocess_compare import Pixels, Variant, compare_values, main, paired_timings
 from app.vision.depth_estimator import DepthConfig
+from tests.workspace_temp import workspace_tempdir
 
 
 class ComparisonTests(unittest.TestCase):
@@ -90,7 +90,7 @@ class ComparisonTests(unittest.TestCase):
 
     def test_cli_metadata_failure_and_exclusive_output(self) -> None:
         """模拟后端验证报告身份与原图不持久化，旧输出和失败结果受保护。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             root = Path(directory)
             image, output = root / "input.jpg", root / "report.json"
             image.write_bytes(b"synthetic")

@@ -1,6 +1,5 @@
 import ast
 import os
-import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -16,6 +15,7 @@ from app.vision.detector import (
     parse_detections,
     select_device,
 )
+from tests.workspace_temp import workspace_tempdir
 
 
 class FakeBackend:
@@ -36,7 +36,7 @@ class DetectionTests(unittest.TestCase):
         """在其他工作目录启动时仍加载项目配置，不加载同名的本地配置。"""
         project_config = Path(__file__).resolve().parents[1] / "configs/system.ini"
         original_directory = Path.cwd()
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             local_config = Path(directory) / "configs/system.ini"
             local_config.parent.mkdir()
             local_config.write_text("invalid configuration", encoding="utf-8")
@@ -55,7 +55,7 @@ class DetectionTests(unittest.TestCase):
     def test_explicit_config_remains_relative_to_working_directory(self) -> None:
         """显式配置路径仍以工作目录为基准，不被项目默认配置覆盖。"""
         original_directory = Path.cwd()
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             custom_config = Path(directory) / "custom.ini"
             custom_config.write_text(
                 "[detection]\nweights=custom.pt\nconfidence=0.6\n"
@@ -124,7 +124,7 @@ class DetectionTests(unittest.TestCase):
         self.assertEqual(backend.calls, 0)
 
     def test_missing_weights_fail_without_download(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             with self.assertRaises(FileNotFoundError):
                 Yolo11Detector(DetectionConfig(Path(directory) / "yolo11n.pt"))
 
@@ -145,7 +145,7 @@ class DetectionTests(unittest.TestCase):
             DetectionConfig(Path("unused.pt"), device="gpu")
 
     def test_config_relative_paths(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             path = Path(directory) / "settings.ini"
             path.write_text(
                 "[detection]\nweights=models/yolo11n.pt\nconfidence=0.4\n"
@@ -157,7 +157,7 @@ class DetectionTests(unittest.TestCase):
             self.assertEqual(config.confidence, 0.4)
 
     def test_cli_reports_unavailable(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             with self.assertLogs(level="ERROR"):
                 self.assertEqual(
                     main(

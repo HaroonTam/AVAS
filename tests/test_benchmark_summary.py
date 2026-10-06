@@ -2,7 +2,6 @@
 
 import io
 import json
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from copy import deepcopy
@@ -16,6 +15,7 @@ from app.benchmark_summary import (
     mapping,
     slowest_samples,
 )
+from tests.workspace_temp import workspace_tempdir
 
 
 def fixture(run: int, depth: bool = True) -> dict[str, object]:
@@ -130,7 +130,7 @@ def change(
 class SummaryTests(unittest.TestCase):
     def test_slowest_samples_keep_locations_and_group_baselines(self) -> None:
         """验证最慢样本原始索引、阶段值和同轮同图参照，避免全局基线混杂。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             paths = tuple(Path(directory) / f"{i}.json" for i in range(3))
             for i, path in enumerate(paths):
                 path.write_text(json.dumps(fixture(i)), encoding="utf-8")
@@ -159,7 +159,7 @@ class SummaryTests(unittest.TestCase):
 
     def test_slowest_ties_disabled_depth_and_small_input(self) -> None:
         """并列时按原始索引稳定排序；小样本全保留，未启用深度始终为 null。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             path = Path(directory) / "run.json"
             report = fixture(0, depth=False)
             for image_index in range(2):
@@ -192,7 +192,7 @@ class SummaryTests(unittest.TestCase):
 
     def test_pooled_and_run_mean_statistics_are_distinct(self) -> None:
         """从原始样本重算统计，区分合并分位数、轮均值分布及轮间样本标准差。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             paths = tuple(Path(directory) / f"{i}.json" for i in range(2))
             for i, path in enumerate(paths):
                 path.write_text(json.dumps(fixture(i)), encoding="utf-8")
@@ -231,7 +231,7 @@ class SummaryTests(unittest.TestCase):
             (("torch_threads",), 2),
             (("sampling_order",), "shuffled"),
         )
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             paths = (Path(directory) / "a.json", Path(directory) / "b.json")
             paths[0].write_text(json.dumps(fixture(0)), encoding="utf-8")
             for field, value in edits:
@@ -262,7 +262,7 @@ class SummaryTests(unittest.TestCase):
             (("current_scene",), True),
             (("schema_version",), 1),
         )
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             path = Path(directory) / "bad.json"
             for field, value in edits:
                 with self.subTest(field=field):
@@ -283,7 +283,7 @@ class SummaryTests(unittest.TestCase):
 
     def test_duplicates_and_round_count_are_rejected(self) -> None:
         """同一报告的路径别名、复制件及重新序列化副本不得重复计入实验。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             first, second = Path(directory) / "a.json", Path(directory) / "b.json"
             report = fixture(0)
             first.write_text(json.dumps(report), encoding="utf-8")
@@ -299,7 +299,7 @@ class SummaryTests(unittest.TestCase):
 
     def test_disabled_depth_and_cli_output_protection(self) -> None:
         """无深度报告不生成深度统计；CLI 保留原始输入并拒绝覆盖输出。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             paths = tuple(Path(directory) / f"{i}.json" for i in range(2))
             output = Path(directory) / "summary.json"
             for i, path in enumerate(paths):

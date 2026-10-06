@@ -3,7 +3,6 @@
 import importlib.util
 import io
 import json
-import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
@@ -32,6 +31,7 @@ from app.vision.depth_estimator import (
 from app.vision.depth_profile import STAGES, DepthProfiler, synchronize_device
 from app.vision.detector import Image
 from tests.test_live import FakeDetector
+from tests.workspace_temp import workspace_tempdir
 
 
 class ProfiledFakeEstimator:
@@ -200,7 +200,7 @@ class ProfileTests(unittest.TestCase):
         """验证单图和多图诊断协议、元数据、默认兼容性及旧汇总拒绝混用。"""
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             main(["--image", "unused", "--output", "unused.json", "--profile-depth"])
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             root = Path(directory)
             weights = root / "yolo.pt"
             weights.write_bytes(b"synthetic")

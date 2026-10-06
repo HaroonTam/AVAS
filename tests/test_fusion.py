@@ -3,7 +3,6 @@
 import importlib.util
 import io
 import json
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from dataclasses import asdict, replace
@@ -19,6 +18,7 @@ from app.main import main
 from app.vision.depth_estimator import RelativeDepth
 from app.vision.detector import Detection
 from app.visualization import save_detections
+from tests.workspace_temp import workspace_tempdir
 
 
 class FusionTests(unittest.TestCase):
@@ -165,7 +165,7 @@ class FusionTests(unittest.TestCase):
 
     def test_configuration_and_old_config_defaults(self) -> None:
         """读取实验配置并兼容旧文件，非法参数必须失败。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             path = Path(directory) / "config.ini"
             path.write_text("[detection]\n", encoding="utf-8")
             self.assertEqual(load_fusion_config(path), FusionConfig())
@@ -191,7 +191,7 @@ class FusionTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("cv2"), "OpenCV is not installed")
     def test_cli_rejects_wrong_frame_and_preserves_detection(self) -> None:
         """错误帧深度经 CLI 降级，JSON 仍提供检测与未知距离。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             source = Path(directory) / "input.png"
             save_detections(np.zeros((20, 30, 3), np.uint8), (), source)
             output = io.StringIO()

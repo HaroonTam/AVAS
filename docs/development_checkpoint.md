@@ -312,3 +312,30 @@
 - 新增 5 项合成测试，全量 `D:\python\python.exe -m unittest discover -s tests -q` 164 项通过；`ruff check .`（含 ANN）与 `ruff format --check .` 50 文件通过。
 - 未修改感知模型或风险规则，未开启相机、麦克风、声音；真实方向查询成功率和新增语音识别率尚未测量。
 - 完整改动本地提交，不自动推送；保留个人 `.idea/` 和既有实验结果。
+
+## 交互能力补全（2026-10-07）
+
+- 听取期间支持键盘 `cancel`／`取消` 与 `quit`／`退出`；识别在独立线程执行，回收有界，
+  迟到结果丢弃且不会变成查询，其他完整行提示未执行。
+- 多目标消歧时说明候选方向分布与帧 ID（最多展开三个），明确该顺序不代表最近或推荐目标。
+- 新增 `app/agent/labels.py`：六个已支持类别的中文显示与查询别名共用同一固定映射，
+  未配置名称按原文转义；结构化对象的 `label` 仍保留模型原始名称。
+- 新增 `usage_help()` 与 `feedback_text()` 白名单：无场景事实的固定用法说明与操作反馈，
+  不朗读回答正文、不断言设备或目标状态。
+- 新增 `app/demo_interaction.py` 合成控制台验收，由 `app.demo` 一并运行：脚本化输入、
+  取消后迟到结果、低分反馈、方向摘要与重查、候选方向说明、模拟语音与关闭。
+  不创建真实终端、麦克风或音频进程。
+- 全量 194 项合成测试；本阶段未接真实终端、麦克风、扬声器，未测量识别率或音频延迟。
+
+## 校验基线修复（2026-10-07）
+
+- 修复 `app/vision/detector.py` 的 `I001` 导入排序：此前干净修订上 `ruff check` 也报 1 项错误，
+  说明提交前的检查未覆盖静态检查。现 `ruff check .` 全部通过。
+- 新增 `tests/workspace_temp.py`：测试临时目录建在被忽略的 `outputs/test_tmp/` 下，
+  替代 9 个测试模块中的 30 处 `tempfile.TemporaryDirectory`，不再依赖系统临时目录，
+  在受限沙箱（`mkdtemp` 目录内写入被拒绝）下也可完整运行。
+- 新增 `scripts/check.ps1`：按 `AVAS_PYTHON`、`D:\python\python.exe`、`.venv`、`python` 顺序
+  选择解释器（可用 `-Python` 覆盖），依次运行 unittest、`ruff check`、`ruff format --check`，
+  任一步失败返回非零。
+- 验证：`powershell -NoProfile -File scripts/check.ps1` 通过，194 项测试、Ruff 全绿、53 文件格式一致。
+- 未修改模型、风险规则、实时告警通路、配置默认值或既有实验结果；未开启相机、麦克风或声音。

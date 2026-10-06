@@ -2,7 +2,6 @@
 
 import importlib.util
 import io
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -13,6 +12,7 @@ import numpy as np
 from app.main import main
 from app.vision.detector import Detection
 from app.visualization import draw_detections, save_detections
+from tests.workspace_temp import workspace_tempdir
 
 
 @unittest.skipUnless(importlib.util.find_spec("cv2"), "OpenCV is not installed")
@@ -43,7 +43,7 @@ class VisualizationTests(unittest.TestCase):
         import cv2
 
         image = np.zeros((80, 100, 3), dtype=np.uint8)
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             target = Path(directory) / "检测结果" / "图像.png"
             save_detections(image, (), target)
             original_bytes = target.read_bytes()
@@ -55,7 +55,7 @@ class VisualizationTests(unittest.TestCase):
 
     def test_unsupported_extension_writes_nothing(self) -> None:
         """不支持的格式应明确失败，不生成误导性文件。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             target = Path(directory) / "result.txt"
             with self.assertRaises(ValueError):
                 save_detections(np.zeros((20, 20, 3), dtype=np.uint8), (), target)
@@ -63,7 +63,7 @@ class VisualizationTests(unittest.TestCase):
 
     def test_cli_saves_only_when_requested(self) -> None:
         """默认运行不保存图像，只有显式参数才触发写入。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             source = Path(directory) / "source.png"
             save_detections(np.zeros((80, 100, 3), dtype=np.uint8), (), source)
             target = Path(directory) / "result.png"
@@ -91,7 +91,7 @@ class VisualizationTests(unittest.TestCase):
 
     def test_cli_output_failure_returns_error(self) -> None:
         """拒绝覆盖输入图片，并将保存失败作为命令失败报告。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             source = Path(directory) / "source.png"
             save_detections(np.zeros((80, 100, 3), dtype=np.uint8), (), source)
             original = source.read_bytes()

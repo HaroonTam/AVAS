@@ -3,7 +3,6 @@
 import importlib.util
 import io
 import json
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -21,6 +20,7 @@ from app.vision.depth_estimator import (
 )
 from app.vision.detector import Detection, Image
 from app.visualization import render_relative_depth, save_detections
+from tests.workspace_temp import workspace_tempdir
 
 
 class FakeDepthBackend:
@@ -75,7 +75,7 @@ class DepthTests(unittest.TestCase):
 
     def test_missing_weights_and_corrupt_weights_fail_locally(self) -> None:
         """缺少文件或校验失败时不尝试联网下载其他模型。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             root = Path(directory)
             with self.assertRaises(FileNotFoundError):
                 DepthAnythingV2Estimator(DepthConfig(root))
@@ -90,7 +90,7 @@ class DepthTests(unittest.TestCase):
 
     def test_depth_config_paths_and_validation(self) -> None:
         """模型路径以配置文件定位，非法输入尺寸必须拒绝。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             path = Path(directory) / "system.ini"
             path.write_text(
                 "[depth]\nmodel_dir=model\nimage_size=518\ndevice=cpu\n",
@@ -121,7 +121,7 @@ class DepthTests(unittest.TestCase):
         )
         result = estimator.estimate(np.zeros((2, 3, 3), np.uint8), "frame")
         self.assertTrue((render_relative_depth(result) == 127).all())
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             path = Path(directory) / "深度.npz"
             save_relative_depth(result, path)
             with np.load(path, allow_pickle=False) as data:
@@ -136,7 +136,7 @@ class DepthTests(unittest.TestCase):
     @unittest.skipUnless(importlib.util.find_spec("cv2"), "OpenCV is not installed")
     def test_depth_failure_preserves_detections(self) -> None:
         """深度初始化失败时返回降级状态和非零退出码，但保留检测事实。"""
-        with tempfile.TemporaryDirectory() as directory:
+        with workspace_tempdir() as directory:
             source = Path(directory) / "source.png"
             save_detections(np.zeros((10, 10, 3), np.uint8), (), source)
             output = io.StringIO()
