@@ -4,7 +4,7 @@
 
 **未测量：首次 B-1 尝试没有有效起声样本。** 用户确认听到完整提示、环境安静，
 但这不提供起声时间。首次运行退出码 2，仅尝试 1 条 8 字符提示后停止；
-不能给出有效的 mean、p50、p95 或 max。任务 B 报告按“不可靠时如实写未测量”交付；有效延迟测量未完成。v2 WASAPI 时间戳异常，MME 诊断在语音提交前停止。
+不能给出有效的 mean、p50、p95 或 max。此前任务 B 报告按“不可靠时如实写未测量”交付；用户随后要求继续，现准备 v3 原生采集诊断，有效延迟测量仍未完成。v2 WASAPI 时间戳异常，MME 诊断在语音提交前停止。
 
 | 文本组 | 计划数 | 已尝试 | 有效 | 排除 | mean / p50 / p95 / max |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -155,3 +155,25 @@ v2 保持原有判据，新增每 200 ms 的最大 RMS 统计和异常时间间�
 - 仓库检查：208 项测试、Ruff lint 和 53 文件格式检查通过；
   仅校验进程使用 `-ExecutionPolicy Bypass`，不修改系统执行策略。
   未提交 outputs、原始图像／音频、环境文件或生产依赖变更，未推送。
+
+## 用户要求继续：v3 原生 WASAPI 时间戳（待真机验证）
+
+不再通过 PortAudio 的 inputBufferAdcTime 获取时间，改由独立的
+`outputs/native_capture_probe.py` 调用 Windows IAudioCaptureClient::GetBuffer。
+[微软文档](https://learn.microsoft.com/en-us/windows/win32/api/audioclient/nf-audioclient-iaudiocaptureclient-getbuffer)
+定义其 QPC 输出为包内第一音频帧的设备时间，单位为 100 ns。
+`outputs/audible_latency_probe_v3.py` 将其除以 10000000，与已经过同源检查的
+perf_counter 提交时间相减；不加 API 缓冲值，不依赖此前可疑的 WASAPI 封装时间戳。
+
+- 使用 Windows 默认 eCapture/eConsole 输入，结果保存端点 ID；仍需用户确认系统默认
+  录音设备为内置麦克风。生产 WindowsSpeechBackend 和 SpeechWorker 不变，无新增依赖。
+- 仅接受原生 48 kHz float32 格式；多声道输入提取第一声道，结果记录原生声道数，
+  与之前单声道 API 请求的差异明确保留。保持 20 ms 单声道 RMS 分析、原阈值与敏感性检查。
+- 输入包错误、时间戳错误、设备帧位置间断在预热后使样本无效。固定舍弃前 0.5 秒
+  启动预热区并记录数量及启动标志，该区早于提交和基线；后续连续性阈值不放宽。
+- 记录 GetStreamLatency 和实际缓冲容量，采集循环约每 2 ms 轮询，但轮询节奏不是
+  起声时刻：起声定位使用音频包携带的设备 QPC 时间戳。原始音频仍只留内存。
+- 新探针无设备自检通过：PCM 解码与无效格式拒绝、QPC 与 perf_counter 同源、
+  既有 RMS 算法及无效样本排除；Ruff lint/format 通过。COM 设备调用与真机结果尚未验证。
+- 下一步由用户执行一条 v3 诊断；通过后再独立采集 13 条正式样本，失败记录不覆盖、
+  不与新批次混合。当前有效延迟统计仍全部为“未测量”。
