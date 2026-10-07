@@ -6,6 +6,20 @@
 仓库：`D:\A Visual Assistance System for Visually Impaired People Based on YOLO11 and Depth Anything V2`
 执行前请先读 `AGENTS.md`（强制规则）与 `docs/development_checkpoint.md`（最新进展在文件顶部）。
 
+## 0. 状态更新（2026-10-08，晚于本文档提交）
+
+- 任务 A：**通过**（2026-10-07）。
+- 任务 B：**测量完成**——2026-10-08 用 v9 协议一次集齐 5／5／3 配额，合规池 26 条，
+  提交→起声 p50 951.9 ms／p95 984.1／max 1009.5；声程与端点启动延迟未校准。
+  方法、样本、误差来源与局限见 [可听告警延迟](audible_latency.md)。
+- 任务 C：**完成**——D3 选定「公开数据集子集」，已按 COCO val2017 全量 5000 张评估：
+  AP 0.379／AP50 0.534／AP75 0.412，工作点 P 0.790／R 0.451；见
+  [检测精度评估](detection_accuracy.md)。
+- 任务 D：**未开始**。D4 尚未选定方案，且标定相机未确定；目前只做了流程验证
+  （公开真值集、另一域，不作标定依据），见 [米制标定流程验证](metric_calibration_validation.md)。
+- 第四节以下的验收判据仍然适用；下面 §1 保留本文档提交时的状态，不再逐条回填，
+  测试基线由当时的 208 项增至 **229 项**。
+
 ## 1. 当前状态（截至本文档提交）
 
 - 已完成：YOLO11 检测、Depth Anything V2 相对深度、同帧融合与方向、确定性风险引擎、
@@ -197,7 +211,8 @@
 
 当前基线：
 - 修订以 git log -1 --oneline 为准（交接时为 76758a6）；工作区应只有未跟踪的 .idea/
-- 校验入口：powershell -NoProfile -File scripts/check.ps1（应 208 项测试通过、Ruff lint/format 全绿）
+- 校验入口：powershell -NoProfile -File scripts/check.ps1（交接时为 208 项测试、Ruff lint/format 全绿；
+  当前为 **229 项**——以实跑结果为准，不要按固定条数判失败）
 - 解释器：D:\python\python.exe（Python 3.12，torch 2.7.0+cu118，CUDA，RTX 4060 Laptop）
 - 硬件：内置摄像头 HP True Vision FHD Camera（[camera] index = 0）、3 个已启用 zh-* 音色
   （首选 Microsoft Huihui Desktop）、扬声器与麦克风可用

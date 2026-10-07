@@ -18,7 +18,7 @@ D-1 只有合成测试，高风险告警抢占在无米制标定下不具备验�
 | 检查 | 方法 | 通过条件 |
 | --- | --- | --- |
 | 解释器与依赖 | `D:\python\python.exe -m app.main --help` | 打印用法，无 ImportError |
-| 合成基线 | `powershell -NoProfile -File scripts/check.ps1` | 当前 204 项测试通过、Ruff 全绿 |
+| 合成基线 | `powershell -NoProfile -File scripts/check.ps1` | 当前 229 项测试通过、Ruff 全绿 |
 | 中文语音 | 见 `[speech]`；系统需已安装并启用至少一个 zh-* 音色 | 能听到合成中文 |
 | 摄像头 | 确认 `[camera] index` 与实际设备一致 | `--max-frames 5` 能读到帧 |
 | 安装朝向 | `[fusion] camera_orientation` | 已知前向填 `forward`，否则必须填 `unknown` |

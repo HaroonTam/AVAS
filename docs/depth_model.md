@@ -52,7 +52,9 @@ Get-FileHash (Join-Path $depthModelDir 'model.safetensors') -Algorithm SHA256
 PNG 只用于检查，每图归一化；无效位置为紫色，常量有效图为中灰。
 原始 `.npz` 的 `relative_depth` 未做显示归一化；用 `allow_pickle=False` 读取。
 离线 `frame_id` 是解码 BGR 像素的 SHA256，仅标识这份输入，不代表时间戳或跟踪身份。
-尚未实现目标深度区域统计、标定、风险阈值或实时场景时效判断。
+目标深度区域统计、方向与风险阈值、场景时效判断已分别在 fusion、risk_engine 与
+live_pipeline 中实现；**米制标定仍未实现**——其流程已在公开真值集上做过另一域验证
+（见 [米制标定流程验证](metric_calibration_validation.md)），本机标定待相机与方案确定后进行。
 
 ## 验证范围
 

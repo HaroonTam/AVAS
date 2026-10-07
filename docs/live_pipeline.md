@@ -59,7 +59,9 @@ Windows 交互终端可添加 `--console`，在独立线程输入“描述周围
 `reply_queue_horizon_s=0` 时不扩展。事实回答的时效仍由场景凭据在播放前复核决定。
 相机故障后的结束提示按文本长度有界等待（上限 20 秒）。
 当前每句话启动一个隐藏 PowerShell 进程；本机整段朗读墙钟实测拟合为约 1.1 秒加
-0.26 秒/字符（含进程启动，**不是**可听起声延迟），提交到实际起声的延迟仍未测量。
+0.26 秒/字符（含进程启动，**不是**可听起声延迟）。提交到实际起声的延迟已于 2026-10-08
+用同机采集测量（合规池 26 条，p50 951.9 ms），但未做声程与端点启动延迟校准，
+不能视为精确物理发声时刻；方法与局限见 [可听告警延迟](audible_latency.md)。
 文本通过 Base64 编码作为数据传递，不作为 PowerShell 指令执行。
 Windows 语音 API 依据：[SpeechSynthesizer 官方说明](https://learn.microsoft.com/en-us/dotnet/api/system.speech.synthesis.speechsynthesizer?view=netframework-4.6)。
 
@@ -77,11 +79,13 @@ Windows 语音 API 依据：[SpeechSynthesizer 官方说明](https://learn.micro
 ## 验证状态
 
 合成测试覆盖基础感知、风险、队列替换、采集故障、幂等关闭、语音抢占／取消／超时／启动失败、
-过期帧、实时成功输出、深度降级、场景工具与交互层；全量 204 项见 README 的验证命令。
+过期帧、实时成功输出、深度降级、场景工具与交互层；全量 229 项见 README 的验证命令。
 测试不打开真实摄像头、不播放声音。Ruff lint/format、两个 CLI 帮助和离线锁检查均通过。
 真实设备首次验收已执行：A/B/C/D 实测、失败项与未测量项见
 [实时阶段完成记录](development_checkpoint.md) 的「真实硬件验收」一节。
-可听告警延迟、摄像头 FPS、内存、真实危险准确率与米制距离误差仍未测量，
+可听告警延迟已测量（见 [可听告警延迟](audible_latency.md)，声程未校准），
+检测精度已在 COCO val2017 上测量（见 [检测精度评估](detection_accuracy.md)，非本项目场景）；
+摄像头 FPS、内存、本项目场景内的危险准确率与米制距离误差仍未测量，
 首次验收按 [硬件验收协议](hardware_acceptance.md) 执行。
 
 当前模型原生推理没有硬超时，终端输出也可能受接收端阻塞影响。未提供硬实时延迟保证。

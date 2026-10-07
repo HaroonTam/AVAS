@@ -40,7 +40,9 @@ CLI 用解码图像字节的 SHA256 作为离线输入身份。它不是摄像�
 状态包括 `available`、`depth_unavailable`、`empty_region`、`insufficient_valid_pixels`。
 微小框内缩后可能为空，此时不擅自退回单像素。保留检测置信度，与深度统计质量明确分开。
 尚未实现标定，始终输出 `calibration_status=not_calibrated`、`distance_m=null`、
-`distance_status=metric_unavailable`、`risk_level=unknown`。
+`distance_status=metric_unavailable`、`risk_level=unknown`；标定流程已在公开真值集上
+做过另一域验证（见 [米制标定流程验证](metric_calibration_validation.md)），
+本机标定待相机与方案确定后进行。
 
 ## 方向与安装
 
