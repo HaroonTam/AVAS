@@ -180,3 +180,57 @@
 - 需要硬件（相机、麦克风、扬声器）的步骤必须由用户在自己的终端执行；
   AI 只能给命令、读取结果并记录。受限沙箱内 `tempfile.mkdtemp` 子目录写入会被拒绝，
   测试已改用项目内临时目录，遇到其它受限情况按实际报错如实记录。
+
+## 10. 交接提示词（可直接复制给执行者）
+
+```text
+你是本仓库的接手执行者，负责执行真实硬件验收之后的两项任务。
+
+仓库：D:\A Visual Assistance System for Visually Impaired People Based on YOLO11 and Depth Anything V2
+（若你没有文件访问权限，请先让我粘贴 AGENTS.md 与 docs/next_tasks.md 全文，再按同样流程执行。）
+
+第一步，按顺序读这四份文件：
+1. AGENTS.md —— 强制规则与红线
+2. docs/next_tasks.md —— 本次任务要求（§3 决策门、§4 任务 A、§5 任务 B、§10 本提示词）
+3. docs/development_checkpoint.md —— 顶部三节（最新进展；最近一次是 C 会话收尾复验）
+4. docs/hardware_acceptance.md —— 硬件验收协议（命令与记录模板）
+
+当前基线：
+- 修订以 git log -1 --oneline 为准（交接时为 76758a6）；工作区应只有未跟踪的 .idea/
+- 校验入口：powershell -NoProfile -File scripts/check.ps1（应 208 项测试通过、Ruff lint/format 全绿）
+- 解释器：D:\python\python.exe（Python 3.12，torch 2.7.0+cu118，CUDA，RTX 4060 Laptop）
+- 硬件：内置摄像头 HP True Vision FHD Camera（[camera] index = 0）、3 个已启用 zh-* 音色
+  （首选 Microsoft Huihui Desktop）、扬声器与麦克风可用
+- 已完成：Phase 1.2 真机验收、3 项语音缺陷修复与真机复验、回答与固定反馈排队期限修复、
+  C 会话收尾复验（退出码 0、cancel 路径通过、无 powershell 子进程泄漏）
+
+本次范围：只做任务 A（决策门 D1）与任务 B（决策门 D2）。
+任务 C/D 在我明确回答 D3/D4 之前不要开始，也不要预先写实现。
+开工前必须先向我确认：
+- D1：是否同意临时开启 independent_hazard_labels（只改临时配置副本，验收后删除并确认默认配置未变）
+- D2：选 B-1 同机采集（需安装开发用 sounddevice，不得写入生产依赖）还是 B-2 外部录音（误差 ≥ ±200 ms）
+
+硬性要求：
+- 没测就写“未测量”；不得估算、不得用合成数据冒充真机数据；capture_to_dispatch、
+  speech_accepted、worker_running 与播放时长估算都不是可听告警延迟
+- 危险告警通路不得引入 LLM、网络或 Agent；Agent 不得编造目标/距离/方向/风险；相对深度不是米
+- 绝不提交 .env 及任何环境变体；outputs/、模型权重、数据集、原始图像与音频都不提交；
+  麦克风采集的原始音频只在内存中使用，不落盘、不提交
+- 每个新增或修改的函数都要有完整类型注解与中文 docstring
+- 每个完整改动：跑 scripts/check.ps1 → 按 AGENTS.md §15 检查暂存内容 → 本地提交（不推送）
+  → 在 docs/development_checkpoint.md 顶部新增一节，如实区分“通过 / 失败 / 未测量”
+- 需要相机、麦克风、扬声器的步骤由我在自己的终端执行；你只给命令、读我贴回的输出并记录，
+  不要在我未确认时尝试打开设备
+
+交付物与判据：
+- 任务 A：outputs/live_hazard_A_<日期>.jsonl（忽略，不提交）+ checkpoint 一节。
+  判据：出现 hazard 事件、等级 medium、speech_accepted ≥ 1，且我听感确认危险提示打断普通回答
+- 任务 B：docs/audible_latency.md（方法、设备与版本、样本数、mean/p50/p95/max、误差来源、局限）
+  + checkpoint 一节。判据：明确测的是“提交→起声”，并写明采集缓冲、起声检测阈值、声程与调度抖动
+
+请先只回答三件事，不要直接开工：
+① 你建议的执行顺序；② 现在需要我回答的决策问题；③ 第一步要我运行的确切命令，以及要贴回的内容。
+```
+
+若执行者没有文件访问权限：先粘贴 `AGENTS.md` 的核心边界章节与本文档全文，
+并要求它把结论仍写入本文档说明的仓库文件（由用户代为提交）。
