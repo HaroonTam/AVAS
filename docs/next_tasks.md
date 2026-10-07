@@ -39,7 +39,7 @@
 | 编号 | 问题 | 为什么必须由用户定 |
 | --- | --- | --- |
 | D1 | 是否执行任务 A（临时开启 `independent_hazard_labels` 验证真机危险告警抢占） | 会临时改变风险规则配置，需用户同意并知道是实验阈值 |
-| D2 | 可听延迟用哪种方法：录音对齐（快、粗）还是 WASAPI loopback（准、需采集脚本，可能新增可选依赖） | 影响是否新增依赖与测量精度 |
+| D2 | 可听延迟用 **B-1 同机采集**（准，需装开发用采集依赖）还是 **B-2 外部录音**（快，误差 ≥ ±200 ms） | 影响是否新增开发依赖与测量精度 |
 | D3 | 检测精度用哪种数据：人工标注现有 4 张图（只能演示流程）还是引入公开数据集子集（需来源/许可/划分） | 影响工作量、许可与结论适用范围 |
 | D4 | 米制方案：自标定（相对深度→映射 + 真值点）还是改用 `Depth Anything V2 Metric` 权重 | 后者改变模型身份，需评估精度/延迟/体积/许可与论文可比性 |
 
@@ -58,33 +58,78 @@
      仅添加 `independent_hazard_labels = person,chair`；**不要改动默认 `configs/system.ini`**。
   2. 运行 A（可机读）：`D:\python\python.exe -m app.live --config configs/system.hw_hazard.ini --max-frames 300 > outputs\live_hazard_<日期>.jsonl`
      逐帧统计 `safety.events` 中 `kind="hazard"` 的数量、等级、`speech_accepted` 合计。
-  3. 运行 B（听感）：`D:\python\python.exe -m app.live --config configs/system.hw_hazard.ini --console --speak-replies`。
-     先输入 `描述周围` 让普通回答开始播放，然后在普通回答播放期间把人物移入画面，
-     观察危险提示是否**立即**播出并打断普通回答。
-  4. 验收后删除临时副本，并确认 `git status` 中 `configs/system.ini` 无改动。
+  3. 运行 B（听感）：
+     `D:\python\python.exe -m app.live --config configs/system.hw_hazard.ini --console --speak-replies`
+  4. 听感序列（细节）：画面内先**不要**有人 → 输入 `描述周围`（普通回答约 15 秒窗口）
+     → 在其播放期间把人移到画面正中（需检测分数 ≥ 0.5 且方向为 front）
+     → 记录危险提示是否立即播出并打断普通回答、之后是否约每 3 秒重播一次 → `quit`。
+  5. 验收后删除临时副本，并确认 `git diff -- configs/` 为空。
+- 机读统计脚本（保存为 `outputs/summarize_hazard.py`，忽略目录，不提交；编码自适应）：
+  ```python
+  import json, pathlib, sys
+
+  raw = pathlib.Path(sys.argv[1]).read_bytes()
+  for encoding in ("utf-8-sig", "utf-16", "gbk"):
+      try:
+          text = raw.decode(encoding)
+          break
+      except UnicodeDecodeError:
+          continue
+  rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+  hazards = [
+      event
+      for row in rows
+      for event in (row.get("safety") or {}).get("events", [])
+      if event["kind"] == "hazard"
+  ]
+  print(
+      "frames", len(rows),
+      "hazard", len(hazards),
+      "accepted", sum(row.get("speech_accepted", 0) for row in rows),
+  )
+  print(sorted({(event["level"], event["message"]) for event in hazards}))
+  ```
+  期望：`hazard` 数量 > 0、等级 `medium`、`accepted ≥ 1`、消息为
+  `前方存在配置规则关注的目标，请注意。`
 - 产出物：`outputs/` 下 JSONL（忽略，不提交）+ checkpoint 新增一节，含事件计数、听感描述与限制。
 - 验收判据：日志出现 `hazard` 事件且 `speech_accepted ≥ 1`；用户确认危险提示打断或先于普通回答；
   降级提示未刷屏（每 30 秒 2 条量级）。
-- 禁止：把 `independent_hazard_labels` 写回默认配置；把"合成阈值"说成"已验证阈值"。
+- 禁止：把 `independent_hazard_labels` 写回默认配置；把"合成阈值"说成"已验证阈值"；
+  没听到却说"已验证可听抢占"。
 
 ## 5. 任务 B：可听告警延迟（提交 → 起声）
 
 **背景**：项目已实测本机中文朗读时长（150 字符 39.47 s、8 字符 3.17 s，拟合约 1.13 s + 0.256 s/字符），
 但"提交时刻到实际起声"从未测量。**未测量前不得给出任何延迟数字。**
 
-- 前置：D2 已选定方法。
-- 方法 1（录音对齐，推荐先做）：
-  1. 非 console 模式运行并保存逐帧日志：`... -m app.live --max-frames 300 > outputs\live_latency_<日期>.jsonl`；
-     日志中每帧的提交时刻可由运行时长与 `latencies_ms` 推算，但**必须**另行记录一个可对齐的同步事件
-     （例如开始时同时敲击桌面/让程序先播一条固定文本），用录音同时捕捉该同步事件与告警起声。
-  2. 用录音软件（手机或系统）录制整段；对齐同一同步事件后，测量每条告警"日志提交时刻 → 录音起声时刻"。
-  3. 报告至少给出样本数、mean、p50、p95、最大、异常值与误差来源。
-- 方法 2（WASAPI loopback）：需写采集脚本，可能新增**可选**依赖；必须经用户同意，
-  放进可选依赖组并把脚本保留在被忽略目录或 `scripts/`，不得影响生产依赖。
-- 产出物：`docs/audible_latency.md`（方法、条件、样本、统计、误差来源、局限）+ checkpoint 一节。
-- 验收判据：报告明确写出测量的是"提交→起声"，与 `capture_to_dispatch` 区分；
-  写明录音设备与扬声器时钟不同步、人工对齐精度等误差来源；不可靠时如实写"未测量"。
-- 禁止：用 `speech_accepted`、`worker_running` 或播放时长估算冒充可听延迟。
+- 前置：用户已确认 D2。
+- **方法 B-1（同机采集，推荐）**：采集音频与提交时间戳来自同一台机器的时钟，无需外部对齐。
+  需要一次性安装**开发用**采集依赖（`sounddevice` 或 `soundcard`）；
+  **不得**写入 `pyproject.toml` 的生产依赖，需在报告中记录版本。
+  1. 安装并记录：`D:\python\python.exe -m pip install sounddevice`；`pip show sounddevice`。
+  2. 写一次性探针 `outputs/audible_latency_probe.py`（忽略目录，不提交；音频只留在内存，
+     不落盘、不提交）：
+     - 打开 48 kHz 单声道输入流（麦克风；有立体声混音／loopback 时优先），
+       流启动后立即记录 `t0 = time.monotonic()` 与 `stream.latency`（API 缓冲，计入误差）；
+     - 使用**生产**的 `SpeechWorker(WindowsSpeechBackend(rate=0))`，包装 `submit()`：
+       返回 True 时记录 `(time.monotonic(), text)`；
+     - 依次提交真实提示文本：8 字符与 16 字符各 5 条、150 字符 3 条；
+       每条 `wait_idle` 后再提交下一条，避免排队（排队时间不属于起声延迟）；
+     - 结束后按 20 ms 窗口 RMS 找起声样本 `onset_sample`，则
+       `onset_abs ≈ t0 + stream.latency + onset_sample / 48000`，
+       `latency_i = onset_abs - submit_time_i`（麦克风到扬声器声程约 3 ms/m，计入误差）。
+  3. 运行：`D:\python\python.exe outputs\audible_latency_probe.py`；安静环境，音量与验收时一致。
+  4. 统计：按文本长度分组与合并给出样本数、mean、p50、p95、max；剔除误检时说明规则与剔除数量。
+- **方法 B-2（外部录音，备用，误差大）**：无法安装采集依赖时使用。
+  1. 手机持续录音并靠近扬声器；同时运行 `app.live` 并保存逐帧 JSONL。
+  2. 报告中必须写明时钟对齐方法、人工起声判读方式、误差下界（≥ ±200 ms）与样本数；
+     不得把结果写成精确延迟，必要时只给区间。
+- 产出物：`docs/audible_latency.md`（方法、设备与版本、样本、统计、误差来源、局限）+
+  checkpoint 一节；并明确写出这是"提交→起声"，不是场景采集→起声，也不是识别延迟。
+- 验收判据：报告区分提交与起声，写明采集缓冲、起点检测阈值、声程与调度抖动等误差来源；
+  不可靠时如实写"未测量"。
+- 禁止：用 `speech_accepted`、`worker_running`、播放时长估算或合成计时冒充可听延迟；
+  把麦克风采集的原始音频提交到仓库。
 
 ## 6. 任务 C：检测精度评估
 
