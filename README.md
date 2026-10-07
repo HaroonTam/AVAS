@@ -13,7 +13,9 @@
 已新增本地受限文字交互和输出前事实复核，可处理明确的中文查询命令。
 已接入可选 Windows 本地受限命令 STT，需逐次显式触发听取。
 已补充按图像方向查找与摘要、多目标候选方向说明、中文类别显示、听取期间取消／退出和固定用法帮助。
-米制标定、LLM 交互 Agent 尚未实现；相机、语音输入输出尚未完成真实硬件验证。
+真实硬件验收已完成：Phase 1.2 真机验收、任务 A 危险告警真机抢占、任务 B 可听告警延迟测量与
+3 项语音缺陷的真机复验均已记录（见下方「验证」与 [实时阶段完成记录](docs/development_checkpoint.md)）。
+米制标定与 LLM 交互 Agent 尚未实现。
 当前仍为研究原型，不能视为经过验证的行走辅助。离线图片不作为当前场景。
 
 ## 环境准备（PowerShell，Python 3.10+）
@@ -191,16 +193,20 @@ python -m app.main --help
 
 `scripts/check.ps1` 依次运行全部合成测试、`ruff check` 与 `ruff format --check`，任一步失败返回非零。
 解释器按 `AVAS_PYTHON`、`D:\python\python.exe`、`.venv`、`python` 的顺序选择，也可用 `-Python` 指定。
-当前全量 204 项测试通过。测试临时目录建在被忽略的 `outputs/test_tmp/`
+当前全量 229 项测试通过。测试临时目录建在被忽略的 `outputs/test_tmp/`
 （见 [tests/workspace_temp.py](tests/workspace_temp.py)），不依赖系统临时目录。
-真实相机、麦克风与扬声器的首次验收已按 [硬件验收协议](docs/hardware_acceptance.md) 执行，
+真实相机、麦克风与扬声器的验收已按 [硬件验收协议](docs/hardware_acceptance.md) 执行，
 A/B/C/D 的实测、失败项与未测量项见 [实时阶段完成记录](docs/development_checkpoint.md)；
-协议中不得声称行走安全、识别准确率与可听告警延迟的约束仍然适用。
+可听告警延迟的方法、样本与局限见 [可听告警延迟](docs/audible_latency.md)，
+检测精度见 [检测精度评估](docs/detection_accuracy.md)。
+引用这些实测值时必须同时写明适用范围：延迟值尚未经声程与音频端点启动延迟校准，
+精度值来自 COCO val2017 而不是本项目场景；任何情况下都不得据此声称行走安全。
 检测核心单元测试只需要 NumPy，无需模型、摄像头、网络或 GPU。
 可视化测试还需要 OpenCV，缺少时会显式跳过。
 覆盖边界裁剪、无效输出、置信度阈值、设备选择、配置、失败路径以及全函数注解检查。
 开发环境已有 Ruff 时，可执行 `python -m ruff check .` 和 `python -m ruff format --check .`。
-合成测试不验证模型精度或现实安全性；尚未测量真实精度、FPS、显存或内存占用。
+合成测试不验证模型精度或现实安全性；已测量的是 COCO val2017 上的检测精度与单张检测耗时，
+本项目场景精度、摄像头 FPS、显存与内存占用仍未测量。
 
 ## 离线性能基准
 
@@ -211,12 +217,25 @@ A/B/C/D 的实测、失败项与未测量项见 [实时阶段完成记录](docs/
 计时边界、离线环境设置和复现方法见 [基准说明](docs/benchmark.md)。
 处理速率不等于摄像头 FPS，离线检查耗时不等于告警延迟。
 
+## 检测精度评估
+
+`D:\python\python.exe -m app.detection_accuracy --annotations data/raw/coco/annotations/instances_val2017.json --images-dir data/raw/coco/val2017 --output outputs/detection_accuracy_val2017_run01.json`
+
+在 COCO val2017 全量 5000 张上评估配置中的 YOLO11 权重：AP@[.5:.95] 0.379、AP50 0.534、
+AP75 0.412，生产工作点（`confidence = 0.35`）精确率 0.790／召回率 0.451。
+数据集与权重都不提交（`data/raw/` 与 `*.pt` 已被忽略），输出路径独占，
+报告记录权重与标注 SHA256、设备、包版本与源码哈希。
+结论只适用于 COCO 预训练权重与 COCO 分布，类别里没有「门」「台阶」，
+不能外推到室内视障场景；方法、逐类结果、漏检／误检示例与完整局限见
+[检测精度评估](docs/detection_accuracy.md)。
+
 ## 后续里程碑
 
-1. 准备权重与本地测试图片，验证 YOLO11 类别覆盖与实测延迟。
-2. 已接入 Depth Anything V2；继续在更多场景检查相对深度表现并测量稳态延迟。
-3. 已实现同帧空间融合、方向与实时场景时效检查；米制标定仍待实现。
-4. 已实现确定性风险引擎、实时入口与本地语音调度；下一步进行显式硬件验证与延迟测量。
-5. 已实现受时效约束的本地交互与受限 STT；后续验证真实输入输出并确定 LLM 后端。
+1. 已准备权重与本地测试图片，验证 YOLO11 类别覆盖；检测精度与离线延迟已按公开数据集测量。
+2. 已接入 Depth Anything V2 与同帧融合；米制标定尚未实现，其流程已用公开真值集在另一域验证，
+   本机标定待相机与方案确定后进行（见 [米制标定流程验证](docs/metric_calibration_validation.md)）。
+3. 已实现确定性风险引擎、实时入口与本地语音调度；真机验收与告警延迟已测量并各自成档。
+4. 已实现受时效约束的本地交互与受限 STT；后续验证真实语音输入输出并确定 LLM 后端。
+5. 未完成项：米制距离标定与风险阈值的实测依据、LLM 交互 Agent、多场景精度与资源占用测量。
 
 架构边界与实验要求见 [docs/architecture.md](docs/architecture.md) 和中英文 AGENTS 规范。
