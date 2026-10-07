@@ -163,6 +163,31 @@ class AccuracyMetricTests(unittest.TestCase):
         self.assertEqual(result.ar_1, 1.0)
         self.assertEqual(result.ar_100, 1.0)
 
+    def test_detection_cap_applies_per_image_not_per_class(self) -> None:
+        """每图每类取前 100：第二张图的命中不应被同类全局截断丢掉。
+
+        前两张图各只有 1 个真值与 1 条命中的预测，第三张图有 99 条高分误检；若按
+        「每类全局取前 100」，第二张图的命中会被挤出，AR@100 只会是 0.5。
+        """
+        noisy = tuple(
+            Prediction(
+                category_id=1, score=0.85 - index * 0.002, box=(30.0, 30.0, 5.0, 5.0)
+            )
+            for index in range(99)
+        )
+        truth = {
+            "img1": (TruthBox(category_id=1, box=(0.0, 0.0, 10.0, 10.0)),),
+            "img2": (TruthBox(category_id=1, box=(0.0, 0.0, 10.0, 10.0)),),
+        }
+        predictions = {
+            "img1": (Prediction(category_id=1, score=0.9, box=(0.0, 0.0, 10.0, 10.0)),),
+            "img2": (Prediction(category_id=1, score=0.5, box=(0.0, 0.0, 10.0, 10.0)),),
+            "img3": noisy,
+        }
+        result = evaluate_detections(truth, predictions, {1: "person"}, 0.5)
+        self.assertEqual(result.ar_100, 1.0)
+        self.assertGreater(result.ap, 0.51)
+
     def test_operating_confidence_filters_predictions(self) -> None:
         """低于工作点分数的预测被忽略，召回为 0 且精确率未测量。"""
         truth = perfect_truth((0.0, 0.0, 10.0, 10.0))

@@ -10,13 +10,14 @@ import numpy as np
 
 from app.config import DetectionConfig
 from app.detection_accuracy import (
+    FilteringBackend,
     load_coco_dataset,
     main,
     map_labels_to_categories,
     select_images,
     to_predictions,
 )
-from app.vision.detector import Detection, Image
+from app.vision.detector import Detection, Image, Yolo11Detector
 from tests.workspace_temp import workspace_tempdir
 
 
@@ -60,9 +61,10 @@ def write_image(path: Path) -> None:
 class FakeDetector:
     """固定输出的假检测器：一张图、一个 person 框，用于走通入口。"""
 
-    def __init__(self, config: DetectionConfig) -> None:
-        """记录配置，便于核对评估入口使用的阈值。"""
+    def __init__(self, config: DetectionConfig, backend: object = None) -> None:
+        """记录配置与可选后端；不加载任何真实权重。"""
         self.config = config
+        self.backend = backend
 
     @property
     def supported_labels(self) -> tuple[str, ...]:
@@ -162,7 +164,10 @@ class AccuracyEntryTests(unittest.TestCase):
                 "--output",
                 str(output),
             ]
-            with patch("app.detection_accuracy.Yolo11Detector", FakeDetector):
+            with (
+                patch("app.detection_accuracy.Yolo11Detector", FakeDetector),
+                patch("app.detection_accuracy.UltralyticsBackend", StubBackend),
+            ):
                 self.assertEqual(main(arguments), 0)
                 with self.assertRaises(FileExistsError):
                     main(arguments)
@@ -198,9 +203,58 @@ class AccuracyEntryTests(unittest.TestCase):
                 "--eval-confidence",
                 "0.9",
             ]
-            with patch("app.detection_accuracy.Yolo11Detector", FakeDetector):
+            with (
+                patch("app.detection_accuracy.Yolo11Detector", FakeDetector),
+                patch("app.detection_accuracy.UltralyticsBackend", StubBackend),
+            ):
                 with self.assertRaises(SystemExit):
                     main(arguments)
+
+
+class StubBackend:
+    """空后端：端到端用例用它替换生产 UltralyticsBackend，避免加载真实权重。"""
+
+    def __init__(self, config: DetectionConfig) -> None:
+        """保存配置；不加载任何权重。"""
+        self.config = config
+
+    @property
+    def names(self) -> dict[int, str]:
+        """返回最小类别映射。"""
+        return {0: "person"}
+
+    def predict(self, image: Image) -> list[list[float]]:
+        """不返回任何预测行。"""
+        return []
+
+
+class DegenerateRowBackend:
+    """返回一条退化行与一条正常行的假后端，用于验证过滤与计数。"""
+
+    @property
+    def names(self) -> dict[int, str]:
+        """返回最小类别映射。"""
+        return {0: "person"}
+
+    def predict(self, image: Image) -> list[list[float]]:
+        """返回一条零宽行与一条正常行。"""
+        return [[10.0, 10.0, 10.0, 20.0, 0.5, 0.0], [0.0, 0.0, 32.0, 32.0, 0.9, 0.0]]
+
+
+class FilteringBackendTests(unittest.TestCase):
+    def test_degenerate_rows_are_filtered_and_counted(self) -> None:
+        """零面积行被丢弃并计数，正常行仍由生产检测器解析。"""
+        backend = FilteringBackend(DegenerateRowBackend())
+        detector = Yolo11Detector(DetectionConfig(weights=Path("unused.pt")), backend)
+        detections = detector.detect(np.zeros((64, 64, 3), dtype=np.uint8))
+        self.assertEqual(backend.filtered_rows, 1)
+        self.assertEqual(len(detections), 1)
+        self.assertEqual(detections[0].label, "person")
+
+    def test_filtering_backend_passes_names_through(self) -> None:
+        """类别映射必须原样透传，否则标签到 COCO 类别的映射会失效。"""
+        backend = FilteringBackend(DegenerateRowBackend())
+        self.assertEqual(dict(backend.names), {0: "person"})
 
 
 if __name__ == "__main__":

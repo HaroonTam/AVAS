@@ -1,10 +1,12 @@
 """COCO 风格的检测精度指标：IoU、贪心匹配、AP/AR 与工作点 P/R。
 
 本模块只做数学与匹配，不读文件、不加载模型、不打印结果，便于用合成数据单元测试。
-指标定义对齐 COCO 检测协议：101 点插值 AP、IoU 0.5:0.05:0.95、面积区间 s/m/l、
-每图最多 100 个预测；AP 与召回都在「有真值的类别」上平均，无真值的类别返回 None
-而不是 0，以免把「不适用」当成「全错」。面积区间以外的真值按 COCO 的做法**忽略**
-（与它们重叠的预测既不记 TP 也不记 FP），而不是直接删掉。
+指标定义对齐 COCO 检测协议：101 点插值 AP、IoU 0.5:0.05:0.95、面积区间 s/m/l；
+``MAX_DETECTIONS`` 按 COCO 的语义在**每张图每个类别**内取前 N 个预测（不是每类全局取
+前 N，后者会把多实例类别的召回整段截掉）；面积区间以外的真值按 COCO 的做法**忽略**
+（与它们重叠的预测既不记 TP 也不记 FP），crowd 真值同理。
+AP 与召回都在「有真值的类别」上平均，无真值的类别返回 None 而不是 0，
+以免把「不适用」当成「全错」。
 """
 
 from __future__ import annotations
@@ -216,14 +218,16 @@ def _overlaps_ignored(
 def average_precision(
     matches: Sequence[tuple[float, bool]],
     truth_count: int,
-    max_detections: int = MAX_DETECTIONS,
 ) -> float | None:
-    """按 COCO 的 101 点插值计算 AP；该类无真值时返回 None。"""
+    """按 COCO 的 101 点插值计算 AP；该类无真值时返回 None。
+
+    每图每类的预测上限已在收集阶段应用，因此这里不再截断。
+    """
     if truth_count <= 0:
         return None
     if not matches:
         return 0.0
-    ordered = sorted(matches, key=_match_score, reverse=True)[:max_detections]
+    ordered = sorted(matches, key=_match_score, reverse=True)
     hits = np.array([1.0 if is_hit else 0.0 for _, is_hit in ordered], dtype=np.float64)
     cumulative = np.cumsum(hits)
     precision = cumulative / np.arange(1, hits.size + 1, dtype=np.float64)
@@ -238,13 +242,11 @@ def average_precision(
 def recall_at(
     matches: Sequence[tuple[float, bool]],
     truth_count: int,
-    max_detections: int,
 ) -> float | None:
-    """取最多 ``max_detections`` 个预测时达到的最大召回；无真值时返回 None。"""
+    """返回该类别已经应用每图上限后的最大召回；无真值时返回 None。"""
     if truth_count <= 0:
         return None
-    ordered = sorted(matches, key=_match_score, reverse=True)[:max_detections]
-    hits = sum(1 for _, is_hit in ordered if is_hit)
+    hits = sum(1 for _, is_hit in matches if is_hit)
     return hits / float(truth_count)
 
 
@@ -280,8 +282,13 @@ def _class_matches(
     category_id: int,
     iou_threshold: float,
     area_bounds: tuple[float, float],
+    max_detections: int,
 ) -> tuple[MatchList, int]:
-    """收集某个类别在全部非空图像上的匹配结果；面积区间外的真值按忽略处理。"""
+    """收集某个类别在全部非空图像上的匹配结果。
+
+    ``max_detections`` 按 COCO 语义在每张图每个类别内生效：先按分数取该图该类的前
+    ``max_detections`` 个预测，再与区间内的真值匹配；面积区间以外的真值按忽略处理。
+    """
     low, high = area_bounds
     matches: MatchList = []
     truth_count = 0
@@ -293,8 +300,9 @@ def _class_matches(
         ignored = [
             item.is_crowd or not low <= box_area(item.box) < high for item in truth
         ]
+        ordered = sorted(predictions, key=_prediction_score, reverse=True)
         image_matches, image_truth = match_image(
-            truth, predictions, iou_threshold, ignored
+            truth, ordered[:max_detections], iou_threshold, ignored
         )
         matches.extend(image_matches)
         truth_count += image_truth
@@ -314,12 +322,13 @@ def _average_precision_over_iou(
     category_id: int,
     area_bounds: tuple[float, float],
     iou_thresholds: Sequence[float],
+    max_detections: int,
 ) -> float | None:
     """在给定 IoU 阈值集合上平均某个类别、某个面积区间的 AP。"""
     values: list[float | None] = []
     for threshold in iou_thresholds:
         matches, truth_count = _class_matches(
-            index, category_id, threshold, area_bounds
+            index, category_id, threshold, area_bounds, max_detections
         )
         values.append(average_precision(matches, truth_count))
     return _mean(values)
@@ -336,9 +345,9 @@ def _recall_over_iou(
     values: list[float | None] = []
     for threshold in iou_thresholds:
         matches, truth_count = _class_matches(
-            index, category_id, threshold, area_bounds
+            index, category_id, threshold, area_bounds, max_detections
         )
-        values.append(recall_at(matches, truth_count, max_detections))
+        values.append(recall_at(matches, truth_count))
     return _mean(values)
 
 
@@ -381,12 +390,14 @@ def evaluate_detections(
         predictions_total += prediction_count
         if truth_count == 0:
             without_truth.append(category_id)
-        ap = _average_precision_over_iou(index, category_id, all_bounds, IOU_THRESHOLDS)
+        ap = _average_precision_over_iou(
+            index, category_id, all_bounds, IOU_THRESHOLDS, MAX_DETECTIONS
+        )
         ap50 = _average_precision_over_iou(
-            index, category_id, all_bounds, (IOU_THRESHOLDS[0],)
+            index, category_id, all_bounds, (IOU_THRESHOLDS[0],), MAX_DETECTIONS
         )
         ap75 = _average_precision_over_iou(
-            index, category_id, all_bounds, (IOU_THRESHOLDS[5],)
+            index, category_id, all_bounds, (IOU_THRESHOLDS[5],), MAX_DETECTIONS
         )
         ap_values.append(ap)
         ap50_values.append(ap50)
@@ -394,7 +405,7 @@ def evaluate_detections(
         for key, low, high in AREA_RANGES[1:]:
             area_values[key].append(
                 _average_precision_over_iou(
-                    index, category_id, (low, high), IOU_THRESHOLDS
+                    index, category_id, (low, high), IOU_THRESHOLDS, MAX_DETECTIONS
                 )
             )
             area_recall[key].append(
@@ -442,7 +453,10 @@ def operating_point(
     confidence: float,
     iou_threshold: float = IOU_THRESHOLDS[0],
 ) -> PointMetrics:
-    """计算固定分数阈值下的微平均 TP/FP/FN 与精确率、召回率、F1。"""
+    """计算固定分数阈值下的微平均 TP/FP/FN 与精确率、召回率、F1。
+
+    工作点是生产口径（按分数过滤，不设每图预测上限），与 AP 的 maxDets 协议无关。
+    """
     if not 0.0 <= confidence <= 1.0:
         raise ValueError("confidence must be within 0..1")
     true_positives = 0

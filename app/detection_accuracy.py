@@ -3,6 +3,8 @@
 本入口只读本地权重与本地标注，做单次前向评估；不打开摄像头、麦克风或语音输出，
 不调用 Agent、不联网、不下载权重，也不把预测或图像写入报告。
 精度结论只适用于被评估的数据分布；COCO 类别不含「门」「台阶」。
+导出阈值按协议取 0.001；零面积退化预测行在入口内被显式过滤并计数，因为生产解析器
+对这类行是硬错误，而实测它们只出现在极低分（0.0010–0.0057）。
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ import json
 import logging
 import platform
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -30,7 +33,13 @@ from app.accuracy_metrics import (
 )
 from app.benchmark import code_identity, file_sha256, package_versions, save_report
 from app.config import DetectionConfig, load_config
-from app.vision.detector import Detection, Image, Yolo11Detector
+from app.vision.detector import (
+    Detection,
+    DetectionBackend,
+    Image,
+    UltralyticsBackend,
+    Yolo11Detector,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -166,6 +175,31 @@ def select_images(
     if limit < 1:
         raise ValueError("max images must be positive")
     return names[:limit]
+
+
+class FilteringBackend:
+    """包装生产后端：统计并丢弃零面积预测行，避免低分退化框触发解析器硬错误。"""
+
+    def __init__(self, inner: DetectionBackend) -> None:
+        """记录被包装的后端与已过滤的退化行数。"""
+        self._inner = inner
+        self.filtered_rows = 0
+
+    @property
+    def names(self) -> Mapping[int, str]:
+        """透传权重类别映射。"""
+        return self._inner.names
+
+    def predict(self, image: Image) -> Sequence[Sequence[float]]:
+        """过滤零宽或零高的预测行后再交给检测器解析。"""
+        kept: list[Sequence[float]] = []
+        for row in self._inner.predict(image):
+            x1, y1, x2, y2 = row[0], row[1], row[2], row[3]
+            if x2 <= x1 or y2 <= y1:
+                self.filtered_rows += 1
+                continue
+            kept.append(row)
+        return kept
 
 
 def decode_image(path: Path) -> Image:
@@ -350,6 +384,7 @@ def report_payload(
     outcomes: tuple[ImageOutcome, ...],
     timing: dict[str, float],
     examples: int,
+    degenerate_rows_filtered: int,
     root: Path,
 ) -> dict[str, object]:
     """组装完整报告：身份、数据来源、指标、逐图计数与明确的局限清单。"""
@@ -393,6 +428,7 @@ def report_payload(
             ],
             "ap_interpolation": "COCO 101-point",
             "out_of_range_truth": "ignored like crowd boxes",
+            "degenerate_rows_filtered": degenerate_rows_filtered,
         },
         "metrics": metrics_payload(metrics),
         "per_image": [
@@ -462,7 +498,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--eval-confidence must not exceed the operating confidence")
     dataset = load_coco_dataset(args.annotations)
     selected = select_images(dataset.image_sizes, args.max_images)
-    detector = Yolo11Detector(replace(config, confidence=args.eval_confidence))
+    eval_config = replace(config, confidence=args.eval_confidence)
+    filtering = FilteringBackend(UltralyticsBackend(eval_config))
+    detector = Yolo11Detector(eval_config, filtering)
     labels = detector.supported_labels
     labels_to_categories = map_labels_to_categories(labels, dataset.category_names)
     predictions, outcomes, timing = evaluate_dataset(
@@ -486,6 +524,7 @@ def main(argv: list[str] | None = None) -> int:
         outcomes=outcomes,
         timing=timing,
         examples=args.examples,
+        degenerate_rows_filtered=filtering.filtered_rows,
         root=root,
     )
     save_report(report, args.output)
