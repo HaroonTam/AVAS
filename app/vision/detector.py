@@ -131,7 +131,6 @@ class UltralyticsBackend:
         if config.weights.suffix.lower() != ".pt":
             raise ValueError("this initial adapter requires YOLO11 .pt weights")
         import torch
-
         from ultralytics import YOLO
 
         self._model = YOLO(str(config.weights), task="detect")
