@@ -21,3 +21,8 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "ANN"]
+
+[tool.ruff.lint.isort]
+# 固定本项目自身的包，避免用 src 目录启发式判断：ultralytics 运行时会在仓库根
+# 生成 `Ultralytics/` 设置目录，若被当成 first-party，导入分组会随本机运行痕迹变化。
+known-first-party = ["app", "tests"]
