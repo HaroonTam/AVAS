@@ -1,5 +1,42 @@
 # 实时阶段完成记录
 
+## 校验基线修复：I001 环境差异、时钟舍入抖动与全绿复核（2026-10-17）
+
+- **对齐**：本工作区原停在 `5f77913`（落后 `main` 30 个提交），已纯快进到 `b599ac7` 后开始本次
+  校验；本次改动后 `main` 为 `99e3fee`。
+- **两次失败（复核时发现，均非本次改动引入）**：在当前工具链上实跑 `scripts/check.ps1`，
+  第 2 步在 `b599ac7` 报 `app/vision/detector.py:133 I001 [*]`；
+  第 1 步另有一次 `test_feedback_expiry_covers_a_pending_long_reply` 失败
+  （`AssertionError: 49.99999999999994 not greater than or equal to 50.0`）。
+- **I001 真实根因（此前"ruff 版本漂移"的判断已更正）**：`pyproject.toml` 与 `uv.lock` 未固定
+  ruff 版本只是旁证，不是原因。ultralytics 运行时会在仓库根生成 `Ultralytics/` 设置目录
+  （`persistent_cache.json`、`settings.json`），ruff 的 src 目录启发式据此把 `ultralytics`
+  判为 first-party，于是 `UltralyticsBackend.__init__` 内 `import torch` 与
+  `from ultralytics import YOLO` 之间**需要**空行。该目录只存在于主工作区，另一个工作区没有，
+  因此同一提交在两个工作区得到相反的 lint 结果，文档里的"Ruff 全绿"只在主工作区成立。
+- **修法（两处最小一致改动）**：
+  1. `app/vision/detector.py` 删除该空行（`12d6c77`）；函数签名、类型注解与注释均未改动。
+  2. `pyproject.toml` 设 `[tool.ruff] src = []`，并在 `[tool.ruff.lint.isort]` 显式声明
+     `known-first-party = ["app", "tests"]`（`99e3fee`，取代只设 `known-first-party` 的
+     `7a99592`——后者不覆盖目录启发式，主工作区仍报 I001）。四个变体都用**真实配置**实测过；
+     `--config <文件>` 会**替换**已发现的配置并静默关掉 `I` 规则，不能用作验证手段。
+- **测试抖动根因（机制已复现）**：该断言用精确 `>=` 比较 `expires_at - before` 与
+  `speech_duration_bound()`。单调时钟落在 `now + 50.0` 跨二进制阶的窗口时（本机约
+  `now ∈ [462, 512)` 秒）加法自身会舍入，差值恰好比界小 `2**-44 = 5.684e-14` 秒，即观测到的
+  `49.99999999999994`；窗口外（含 20,000 次循环实测）最小差值为 0.0，故为偶发失败。
+  修法：新增 `CLOCK_ROUNDING_TOLERANCE_S = 1e-6` 容差（`05a1d56`）。该测试守护的回归是
+  「约 49 秒 vs 约 1 秒」量级，1 微秒容差不会掩盖它；生产代码未改。
+- **通过（复核）**：主工作区与工作区副本各自运行 `scripts/check.ps1`，均全绿、退出码 0——
+  `Ran 229 tests … OK`、`ruff check` All checks passed、`ruff format --check` 57 files already
+  formatted。主工作区含权重与 `data/raw/`，副本两者皆无，结果一致。
+- **失败／限制**：本次只覆盖 lint、格式与合成测试，不涉及真机。`src = []` 关闭目录推断后，
+  新增 first-party 包必须补进 `known-first-party`，否则导入分组会重新变得不可预测。
+  本机 Windows PowerShell 5.1 执行策略禁止未签名脚本，`scripts/check.ps1` 需以
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1` 运行。
+- **未测量／未做**：任务 D 标定、风险阈值实测依据、LLM 交互 Agent、本项目场景精度、
+  摄像头 FPS、显存与内存占用、可听告警延迟的声程与端点启动校准——本次均未触及。
+- 未改动风险规则、米制语义、感知通路与语音通路；未打开相机、麦克风或扬声器。
+
 ## 文档同步：docs/ 过时表述清理（2026-10-08）
 
 - **修正状态错误**：`audible_latency.md` 顶部结论仍写「任务 B 未通过、13 条配额尚未集齐」，
