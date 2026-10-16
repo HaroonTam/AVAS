@@ -1,5 +1,38 @@
 # 实时阶段完成记录
 
+## E1 测量入口与汇总准备完成，真机待采集（2026-10-17）
+
+- **授权与基线**：用户确认 F4，允许补充实时入口计时与测量记录。用户终端核验主工作区
+  `main=b6fb2ad936e10aa12318c6b5566b9f4d983785ce`，229 项测试与 Ruff 全绿、退出码 0，
+  仅未跟踪 `.idea/`。本次在同修订的工作区副本实现，未修改主工作区或推送。
+- **实现**：本地提交 `2641c05`（`codex/e1-live-performance`）。增加显式
+  `--performance-output`、资源旁车 JSON、首结果预热标记、累计结果数、单调时间和实际尺寸；
+  增加离线汇总 `app.live_performance` 与用户执行的 `scripts/measure_live.ps1`。
+  复用原有 detection/depth/fusion/risk/capture_to_dispatch；计划中“实时只有两个字段”的
+  判断经代码复核已在 `next_plan.md` 更正，历史小节不改写。
+- **边界**：不增加 CUDA 同步，不改感知顺序、告警派发或队列；记录发生在告警提交之后。
+  CUDA 峰值只代表模型加载后本进程 PyTorch 分配峰值；PowerShell 内存只覆盖主 Python
+  进程，排除相机和语音子进程。有效帧处理 FPS 不冒充摄像头原生采集 FPS。
+  预热、陈旧、深度故障与终止故障分别记录；缺失或损坏的正常行拒绝汇总。
+- **通过**：先运行 `python -m unittest tests.test_live_performance tests.test_live -q`，
+  当时 31 项通过；补充 CUDA/CPU 资源测试后，运行
+  `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1 -Python D:\python\python.exe`：
+  **236 项测试通过、Ruff check 全绿、59 files already formatted、退出码 0**。
+  PowerShell 采集脚本仅执行静态语法解析，通过；未运行该真机脚本。
+  AST 审查所有新增 Python 函数及修改的 `main`：类型注解完整且均有中文 docstring。
+  原有未修改函数的历史注释未作无关翻译。
+- **提交前检查通过**：`git ls-files`、`git diff --cached --name-status`、
+  `git diff --cached --check` 已执行；明确路径暂存，未含 `.env`、环境变体、输出、权重或数据集。
+  暂存内容人工复核与常见凭据模式检查未发现凭据（模式检查不是完整秘密扫描器）。
+- **失败／限制**：普通沙箱无法创建共享 Git 分支，已通过授权执行完成本地分支与提交；
+  未发生测试失败。资源采集脚本的真实 Windows 进程采样、设备运行与最终退出行为尚未验收；
+  合成测试不验证硬件性能或安全性。
+- **未测量**：本次真机分段时延、有效帧处理 FPS、CUDA 分配峰值、主进程内存峰值；
+  原生摄像头 FPS、完整进程树内存与测量开销；没有新增可听延迟测量。
+  E1 尚未完成，需用户在主工作区应用提交、复验并采集后补实测结果。
+  E2–E5 未开始，F1–F3 未作假设。详见 [实时性与资源测量](live_performance.md)。
+- 未打开设备、未保存原始图像或音频；不代表行走安全性、模型识别准确率或米制距离误差。
+
 ## 下一阶段计划与交接文档（2026-10-17）
 
 - 新增 `docs/next_plan.md`：承接 `next_tasks.md`（A/B/C 已完成），给出剩余五条轨道 E1–E5
