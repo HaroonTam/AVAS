@@ -17,6 +17,10 @@ from app.scene_store import SceneStore
 from app.speech.tts import SpeechMessage, SpeechWorker, speech_duration_bound
 from tests.test_live import FakeSpeech
 
+# 单调时钟是大数，`now + 期限` 的浮点舍入可达半个 ULP，实测可差 5.7e-14 秒；
+# 与精确期限比较时保留 1 微秒容差，避免偶发舍入方向导致的假失败（与生产行为无关）。
+CLOCK_ROUNDING_TOLERANCE_S = 1e-6
+
 
 class SpokenReplyTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -427,11 +431,13 @@ class SpokenReplyTests(unittest.TestCase):
         self.assertEqual([message.priority for message in messages], [0, 0])
         self.assertGreaterEqual(
             messages[0].expires_at - before,
-            speech_duration_bound(feedback_text("help")),
+            speech_duration_bound(feedback_text("help")) - CLOCK_ROUNDING_TOLERANCE_S,
         )
         self.assertGreaterEqual(
             messages[1].expires_at - before,
-            speech_duration_bound(feedback_text("help")) + 8.0,
+            speech_duration_bound(feedback_text("help"))
+            + 8.0
+            - CLOCK_ROUNDING_TOLERANCE_S,
         )
 
     def test_zero_queue_horizon_keeps_scene_freshness(self) -> None:
