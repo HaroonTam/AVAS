@@ -53,9 +53,10 @@ F1／F2 未回答前不得开始 E2；F3 未回答前不得开始 E5。
 
 ## 4. E1 实时性与资源测量（建议先做）
 
-现状缺口（已核实）：`app/live.py` 的逐帧 JSONL 只写 `risk` 与 `capture_to_dispatch` 两个计时字段；
-检测、深度、融合的耗时只在离线基准 `app/benchmark.py` 里有（键名 `detection`／`depth`／`fusion`／`total`）；
-摄像头 FPS、显存与内存峰值从未测量，而 `AGENTS.md` §13 要求这几项独立测量。
+代码复核更正（2026-10-17）：`b6fb2ad` 的实时流水线已经记录并输出 `detection`、`depth`、
+`fusion`、`risk` 与 `capture_to_dispatch`，无需重复添加前三段计时。缺口是明确的 FPS
+计数/墙钟边界、资源峰值及汇总记录；真机指标尚未测量。E1 实现与测量口径见
+[实时性与资源测量](live_performance.md)，实际验收仍待用户采集。
 
 步骤：
 
@@ -136,7 +137,7 @@ checkpoint 一节。
 
 ## 9. 建议顺序与交付格式
 
-顺序：**E1（零决策）** → 同时回答 F1／F2 → **E2** → **E4** → E3（可与 E2 并行）→ E5（回答 F3 后）。
+顺序：**E1（修改实时入口前须确认 F4，2026-10-17 已获用户允许）** → 同时回答 F1／F2 → **E2** → **E4** → E3（可与 E2 并行）→ E5（回答 F3 后）。
 
 每个完整改动：跑 `scripts/check.ps1` → 按 `AGENTS.md` §15 检查暂存内容
 （`git ls-files`、`git diff --cached --name-status`、`git diff --cached --check`）→ **本地提交、不推送** →

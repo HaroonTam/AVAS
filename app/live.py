@@ -17,6 +17,7 @@ from app.camera.camera_service import CameraConfig, CameraService, CapturedFrame
 from app.config import load_config
 from app.fusion.config import FusionConfig, load_fusion_config
 from app.fusion.depth_fusion import DetectionFrame, Observation, fuse_frame
+from app.live_performance import PerformanceRecorder
 from app.safety.config import RiskConfig, load_risk_config
 from app.safety.risk_engine import RiskAssessment, WarningEvent, assess_scene
 from app.safety.scene import RiskObject, RiskScene
@@ -204,6 +205,11 @@ def main(
         help="Speak validated console answers at low priority (requires --console)",
     )
     parser.add_argument(
+        "--performance-output",
+        type=Path,
+        help="Opt-in resource metadata JSON (exclusive file; requires JSONL mode)",
+    )
+    parser.add_argument(
         "--max-frames",
         type=int,
         default=0,
@@ -216,15 +222,20 @@ def main(
         parser.error("--speak-replies requires --console and enabled speech")
     if args.voice_input and not args.console:
         parser.error("--voice-input requires --console")
+    if args.performance_output and args.console:
+        parser.error("--performance-output requires per-frame JSONL mode")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     camera: CameraService | None = None
     speech: SpeechWorker | None = None
     console: ConsoleWorker | None = None
+    performance: PerformanceRecorder | None = None
     failed = False
     try:
         settings = ConfigParser(interpolation=None)
         with args.config.open(encoding="utf-8") as source:
             settings.read_file(source)
+        if args.performance_output:
+            performance = PerformanceRecorder(args.performance_output, args.config)
         risk = load_risk_config(args.config)
         if scene_store is None:
             scene_store = SceneStore(risk)
@@ -305,11 +316,14 @@ def main(
             logging.error("Depth unavailable; retaining detection: %s", exc)
             failed = True
         pipeline = PerceptionPipeline(detector, depth, fusion, risk)
+        if performance is not None:
+            performance.start()
         camera = CameraService(camera_config)
         camera.start()
         if console is not None:
             console.start()
         count = 0
+        loop_started = monotonic()
         while args.max_frames == 0 or count < args.max_frames:
             if console is not None and console.exit_requested.is_set():
                 break
@@ -388,6 +402,22 @@ def main(
                 failed = True
             if speech is not None and speech.error:
                 failed = True
+            measurement = {}
+            if performance is not None:
+                measurement = {
+                    "performance": {
+                        "result_index": count + 1,
+                        "warmup": count == 0,
+                        "loop_started_monotonic_s": loop_started,
+                        "captured_monotonic_s": frame.captured_monotonic,
+                        "dispatch_completed_monotonic_s": (
+                            frame.captured_monotonic
+                            + result.latencies_ms["capture_to_dispatch"] / 1000
+                        ),
+                        "width": frame.image.shape[1],
+                        "height": frame.image.shape[0],
+                    }
+                }
             if not args.console:
                 print(
                     json.dumps(
@@ -406,6 +436,7 @@ def main(
                             if speech is None or speech.error
                             else "worker_running",
                             "speech_accepted": accepted,
+                            **measurement,
                         },
                         ensure_ascii=True,
                         allow_nan=False,
@@ -440,6 +471,12 @@ def main(
         if speech is not None:
             speech.close()
             failed = failed or speech.error is not None
+        if performance is not None:
+            try:
+                performance.finish(failed)
+            except Exception as exc:
+                logging.error("Performance report unavailable: %s", exc)
+                failed = True
     return 2 if failed else 0
 
 
