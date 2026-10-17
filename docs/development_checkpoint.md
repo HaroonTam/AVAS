@@ -1,5 +1,29 @@
 # 实时阶段完成记录
 
+## E1 临时等待短诊断通过，修正分段计时量化（2026-10-17）
+
+- **用户真机通过**：`b444fd0`，临时配置 `[camera] timeout_s=15`，前台生产入口 10 个结果，
+  退出 0；预热后有效 9、首帧过期 1、深度降级 0、终止故障 0，实际 640×480。
+  原始前缀 `outputs/startup_wait_c9bd033b45ef4108af9a46b70e7e2dea` 保留，不提交。
+  没有相机清理错误，但未取得可听提示的用户听感确认。
+- **边界**：首帧采集到派发 1313 ms，超过既有 1000 ms 新鲜度而正确标记不可用；默认配置
+  与新鲜度未放宽。后续 9 帧覆盖 0.734 秒，对应 12.261580381468868 FPS，仅为短诊断窗口，
+  不代表稳态或原生采集帧率。旧时钟各分段统计已如实保存在 `docs/live_performance.md`。
+- **实测发现**：无设备查询同机解释器 `time.get_clock_info`，`monotonic` 使用
+  `GetTickCount64()`、声明分辨率 0.015625 s；`perf_counter` 为 `QueryPerformanceCounter()`、
+  声明分辨率 1e-7 s。旧输出的 risk 全 0、fusion 部分 0 不等于零耗时。
+- **修复提交**：`800d585`，四个分段 detection/depth/fusion/risk 改用 `perf_counter`；
+  `capture_to_dispatch`、FPS、新鲜度和告警调度保留原有时钟及语义。记录时钟实现/分辨率与
+  `stage_clock`，汇总拒绝新旧时钟混池。没有 CUDA 同步或新增依赖。
+- **通过**：针对性 `python -m unittest tests.test_live_performance tests.test_live -q`，34 项通过；
+  完整 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/check.ps1 -Python D:\python\python.exe`
+  为 **242 tests OK、Ruff 全绿、62 files already formatted、退出码 0**。
+  AST 审查涉及文件的函数注解与中文 docstring 无缺口；§15 三项检查与暂存内容检查通过，
+  未暂存环境文件、输出、权重或数据集。
+- **未测量／待办**：高分辨率分段的真机结果、正式长时 FPS 与资源峰值未测量；启动根因
+  尚未确定。下一步同为前台启动，以默认 3 秒配置采集 10 个结果作对照，不直接改生产等待。
+  本轮助手未打开设备，E1 尚未验收，不代表行走安全性、模型精度或米制距离误差。
+
 ## E1 独立相机启动诊断通过，生产路径仍待定位（2026-10-17）
 
 - **通过（用户终端）**：主工作区 `5fe991f`，241 项测试与 Ruff 全绿。
