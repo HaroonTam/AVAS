@@ -113,6 +113,8 @@ class CameraService:
         """使用 spawn 隔离原生驱动；构造不立即打开摄像头。"""
         self.config = config
         self._closed = False
+        self._shutdown_complete = False
+        self._queue_closed = False
         context = mp.get_context("spawn")
         self._queue: Queue[CapturedFrame] = context.Queue(maxsize=1)
         self._stop = context.Event()
@@ -155,8 +157,8 @@ class CameraService:
         raise TimeoutError("camera read timeout")
 
     def close(self) -> None:
-        """先有序停止，原生读取卡死时终止隔离进程并关闭队列。"""
-        if self._closed:
+        """有界停止并确认子进程退出后才关闭句柄；仍存活则明确报错，允许再次清理。"""
+        if self._shutdown_complete:
             return
         self._closed = True
         self._stop.set()
@@ -166,7 +168,18 @@ class CameraService:
                 if self._process.is_alive():
                     self._process.terminate()
                     self._process.join(timeout=1)
+                if self._process.is_alive():
+                    self._process.kill()
+                    self._process.join(timeout=1)
+                if self._process.is_alive():
+                    raise RuntimeError(
+                        f"camera process {self._process.pid} still running; "
+                        "handle retained for cleanup retry"
+                    )
                 self._process.close()
+            self._shutdown_complete = True
         finally:
-            self._queue.close()
-            self._queue.cancel_join_thread()
+            if not self._queue_closed:
+                self._queue.close()
+                self._queue.cancel_join_thread()
+                self._queue_closed = True

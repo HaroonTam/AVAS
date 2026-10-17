@@ -357,11 +357,38 @@ class LiveTests(unittest.TestCase):
             service.start()
             with self.assertRaises(TimeoutError):
                 service.read()
+            process.is_alive.side_effect = [True, False, False]
             service.close()
             service.close()
         process.terminate.assert_called_once()
         queue.close.assert_called_once()
         self.assertFalse(service.healthy())
+
+    def test_camera_shutdown_waits_after_kill_and_can_retry(self) -> None:
+        """终止后仍存活时升级清理；持续存活不关闭句柄且可重试，队列只关闭一次。"""
+        for stubborn in (False, True):
+            with (
+                self.subTest(stubborn=stubborn),
+                patch("app.camera.camera_service.mp.get_context") as context,
+            ):
+                service = CameraService(CameraConfig())
+                process = context.return_value.Process.return_value
+                queue = context.return_value.Queue.return_value
+                process.is_alive.side_effect = [True, True, stubborn]
+                if stubborn:
+                    with self.assertRaisesRegex(RuntimeError, "still running"):
+                        service.close()
+                    process.close.assert_not_called()
+                    self.assertFalse(service.healthy())
+                    process.is_alive.side_effect = [False, False, False]
+                    service.close()
+                else:
+                    service.close()
+                service.close()
+                process.terminate.assert_called_once()
+                process.kill.assert_called_once()
+                process.close.assert_called_once()
+                queue.close.assert_called_once()
 
     def test_cancel_stops_old_speech_before_failure_notice(self) -> None:
         """相机失效可撤销旧告警，最终降级提示不被原告警继续播放掩盖。"""
