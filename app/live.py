@@ -248,6 +248,14 @@ def main(
             settings.getint("camera", "width", fallback=640),
             settings.getint("camera", "height", fallback=480),
             settings.getfloat("camera", "timeout_s", fallback=3),
+            startup_timeout_s=settings.getfloat(
+                "camera", "startup_timeout_s", fallback=None
+            ),
+        )
+        logging.info(
+            "Camera waits: startup=%s s, read=%s s",
+            camera_config.startup_timeout_s,
+            camera_config.timeout_s,
         )
         # 降级提示的排队上限：0 表示沿用场景新鲜度；上限防止陈旧提示长期滞留。
         degraded_queue_horizon_s = settings.getfloat(

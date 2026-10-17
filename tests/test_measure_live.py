@@ -23,6 +23,11 @@ class MeasureLiveScriptTests(unittest.TestCase):
 function Start-Process {
     param($FilePath, $ArgumentList, $WorkingDirectory, $WindowStyle,
           [switch]$PassThru, $RedirectStandardOutput, $RedirectStandardError)
+    $configIndex = [array]::IndexOf($ArgumentList, '--config')
+    $expected = '"' + (Resolve-Path 'configs/system.ini').Path + '"'
+    if ($configIndex -lt 0 -or $ArgumentList[$configIndex + 1] -ne $expected) {
+        throw 'Missing or unquoted config path'
+    }
     $probe = '"import time; time.sleep(0.5); raise SystemExit(EXIT_CODE)"'
     $PSBoundParameters['ArgumentList'] = @('-c', $probe)
     Microsoft.PowerShell.Management\Start-Process @PSBoundParameters
@@ -66,4 +71,5 @@ function Start-Process {
                     (directory / "run.json").read_text(encoding="utf-8-sig")
                 )
                 self.assertEqual(metadata["live_exit_code"], exit_code)
+                self.assertEqual(Path(metadata["config"]), root / "configs/system.ini")
                 self.assertEqual((directory / "frames.jsonl").read_bytes(), b"")

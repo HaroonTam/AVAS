@@ -1,12 +1,14 @@
 ﻿# 用户显式执行的真机测量：保持生产语音启用，不保存图像或音频。
 param(
     [string]$Python = "D:\python\python.exe",
+    [string]$Config = "configs/system.ini",
     [ValidateRange(2, 100000)][int]$Frames = 600
 )
 
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $root
+$resolvedConfig = (Resolve-Path -LiteralPath $Config).Path
 $runName = "live_perf_" + (Get-Date -Format "yyyyMMdd_HHmmss") + "_" + [guid]::NewGuid().ToString("N")
 $relative = Join-Path "outputs" $runName
 $directory = New-Item -ItemType Directory -Path $relative
@@ -16,6 +18,7 @@ if ($LASTEXITCODE -ne 0) { throw "Cannot record Git revision" }
 $changes = @(git status --porcelain -- app configs scripts pyproject.toml)
 $process = Start-Process -FilePath $Python -ArgumentList @(
     "-m", "app.live", "--max-frames", "$Frames",
+    "--config", ('"' + $resolvedConfig + '"'),
     "--performance-output", "$relative/resources.json"
 ) -WorkingDirectory $root -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput "$relative/frames.jsonl" `
@@ -49,6 +52,7 @@ try {
         tracked_scope_changes = $changes
         requested_frames = $Frames
         interpreter = $Python
+        config = $resolvedConfig
         live_exit_code = $exitCode
         memory_scope = "main_python_process_only_startup_through_exit"
         sample_interval_requested_ms = 100

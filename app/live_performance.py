@@ -63,6 +63,12 @@ class PerformanceRecorder:
                         self._config.read_bytes()
                     ).hexdigest(),
                     "resolved_config_devices": devices,
+                    "camera_waits_s": {
+                        "read": settings.getfloat("camera", "timeout_s", fallback=3),
+                        "startup": settings.getfloat(
+                            "camera", "startup_timeout_s", fallback=None
+                        ),
+                    },
                     "torch_version": str(torch.__version__),
                     "cuda_peak_scope": "after_model_load_through_shutdown",
                     "resource_status": "available" if self._cuda else "not_cuda",

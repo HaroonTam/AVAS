@@ -390,6 +390,103 @@ class LiveTests(unittest.TestCase):
                 process.close.assert_called_once()
                 queue.close.assert_called_once()
 
+    def test_startup_wait_ends_after_first_packet_without_refreshing_frame(
+        self,
+    ) -> None:
+        """首包可在三秒后到达；保留原时间戳，后续读取立即恢复三秒预算。"""
+        frame = replace(self.frame(), captured_at_ms=1)
+        with (
+            patch("app.camera.camera_service.mp.get_context") as context,
+            patch("app.camera.camera_service.monotonic", return_value=100.0) as clock,
+        ):
+            service = CameraService(CameraConfig(timeout_s=3, startup_timeout_s=15))
+            context.return_value.Process.return_value.is_alive.return_value = True
+            context.return_value.Event.return_value.is_set.return_value = False
+            queue = context.return_value.Queue.return_value
+            queue.get.return_value = frame
+            service.start()
+            clock.return_value = 104.0
+            self.assertIs(service.read(), frame)
+            self.assertEqual(frame.captured_at_ms, 1)
+            clock.side_effect = [104.0, 107.0]
+            with self.assertRaises(TimeoutError):
+                service.read()
+            self.assertEqual(queue.get.call_count, 1)
+
+    def test_startup_budget_not_reset_by_retry_or_duplicate_start(self) -> None:
+        """首次启动预算到期后读取重试及重复启动均不能延长预算。"""
+        with (
+            patch("app.camera.camera_service.mp.get_context") as context,
+            patch("app.camera.camera_service.monotonic", return_value=100.0) as clock,
+        ):
+            service = CameraService(CameraConfig(startup_timeout_s=15))
+            service.start()
+            clock.return_value = 114.0
+            with self.assertRaisesRegex(RuntimeError, "already started"):
+                service.start()
+            clock.return_value = 115.0
+            for _ in range(2):
+                with self.assertRaises(TimeoutError):
+                    service.read()
+            context.return_value.Queue.return_value.get.assert_not_called()
+            context.return_value.Process.return_value.start.assert_called_once()
+
+    def test_startup_wait_keeps_fault_immediate_and_default_unchanged(self) -> None:
+        """启动等待不隐藏已知故障；未配置时依然按每次读取的三秒上限执行。"""
+        for startup in (None, 15.0):
+            with (
+                self.subTest(startup=startup),
+                patch("app.camera.camera_service.mp.get_context") as context,
+                patch(
+                    "app.camera.camera_service.monotonic", return_value=100.0
+                ) as clock,
+            ):
+                service = CameraService(CameraConfig(startup_timeout_s=startup))
+                service.start()
+                context.return_value.Process.return_value.is_alive.return_value = False
+                with self.assertRaisesRegex(RuntimeError, "camera unavailable"):
+                    service.read()
+                context.return_value.Queue.return_value.get.assert_not_called()
+                if startup is None:
+                    clock.side_effect = [104.0, 107.0]
+                    with self.assertRaises(TimeoutError):
+                        service.read()
+        for timeout in (0.0, -1.0, 31.0, float("inf"), float("nan")):
+            with self.subTest(timeout=timeout), self.assertRaises(ValueError):
+                CameraConfig(startup_timeout_s=timeout)
+
+    def test_startup_wait_config_reaches_camera(self) -> None:
+        """生产入口分别传递显式启动预算及缺省值，普通读取超时不被覆盖。"""
+        from configparser import ConfigParser
+        from pathlib import Path
+
+        from tests.workspace_temp import workspace_tempdir
+
+        for startup in (None, 15.0):
+            with self.subTest(startup=startup), workspace_tempdir() as directory:
+                settings = ConfigParser(interpolation=None)
+                settings.read(
+                    Path(__file__).resolve().parents[1] / "configs/system.ini",
+                    encoding="utf-8",
+                )
+                if startup is not None:
+                    settings.set("camera", "startup_timeout_s", str(startup))
+                path = directory / "system.ini"
+                with path.open("w", encoding="utf-8") as target:
+                    settings.write(target)
+                with (
+                    patch("app.live.Yolo11Detector"),
+                    patch("app.vision.depth_estimator.DepthAnythingV2Estimator"),
+                    patch("app.live.CameraService") as camera,
+                    redirect_stdout(io.StringIO()),
+                    self.assertLogs(level="WARNING"),
+                ):
+                    camera.return_value.read.side_effect = RuntimeError("synthetic")
+                    self.assertEqual(main(["--no-speech", "--config", str(path)]), 2)
+                config = camera.call_args.args[0]
+                self.assertEqual(config.startup_timeout_s, startup)
+                self.assertEqual(config.timeout_s, 3.0)
+
     def test_cancel_stops_old_speech_before_failure_notice(self) -> None:
         """相机失效可撤销旧告警，最终降级提示不被原告警继续播放掩盖。"""
         backend = FakeSpeech()

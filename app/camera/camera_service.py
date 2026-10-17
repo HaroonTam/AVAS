@@ -21,9 +21,10 @@ class CameraConfig:
     width: int = 640
     height: int = 480
     timeout_s: float = 3.0
+    startup_timeout_s: float | None = None
 
     def __post_init__(self) -> None:
-        """验证设备索引、请求分辨率及有限读取等待时间。"""
+        """验证设备与有限等待秒数；未配置启动等待时保持原读取超时行为。"""
         if any(
             type(value) is not int for value in (self.index, self.width, self.height)
         ):
@@ -32,6 +33,8 @@ class CameraConfig:
             raise ValueError("invalid camera index or dimensions")
         if not 0 < self.timeout_s <= 30:
             raise ValueError("camera timeout must be in (0, 30] seconds")
+        if self.startup_timeout_s is not None and not 0 < self.startup_timeout_s <= 30:
+            raise ValueError("camera startup timeout must be in (0, 30] seconds")
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,9 @@ class CameraService:
         self._closed = False
         self._shutdown_complete = False
         self._queue_closed = False
+        self._startup_deadline: float | None = None
+        self._received_frame = False
+        self._started = False
         context = mp.get_context("spawn")
         self._queue: Queue[CapturedFrame] = context.Queue(maxsize=1)
         self._stop = context.Event()
@@ -126,10 +132,15 @@ class CameraService:
         )
 
     def start(self) -> None:
-        """显式启动本地采集进程。"""
+        """显式启动采集；可选启动预算从进程启动前起算，首帧前重试不重置预算。"""
         if self._closed:
             raise RuntimeError("camera already closed")
+        if self._started:
+            raise RuntimeError("camera already started")
+        if self.config.startup_timeout_s is not None:
+            self._startup_deadline = monotonic() + self.config.startup_timeout_s
         self._process.start()
+        self._started = True
 
     def healthy(self) -> bool:
         """采集进程退出或故障时立即向调用方标记不可用。"""
@@ -138,8 +149,12 @@ class CameraService:
         )
 
     def read(self) -> CapturedFrame:
-        """有界等待一帧；故障时不返回缓存旧帧，超时由调用方使场景失效。"""
-        deadline = monotonic() + self.config.timeout_s
+        """首个有效包使用可选启动预算，之后恢复普通读取超时；不改帧采集时刻或新鲜度。"""
+        deadline = (
+            self._startup_deadline
+            if not self._received_frame and self._startup_deadline is not None
+            else monotonic() + self.config.timeout_s
+        )
         while monotonic() < deadline:
             if not self.healthy():
                 raise RuntimeError("camera unavailable")
@@ -153,6 +168,7 @@ class CameraService:
                 raise RuntimeError("camera unavailable")
             if not isinstance(frame, CapturedFrame):
                 raise RuntimeError("unexpected camera packet")
+            self._received_frame = True
             return frame
         raise TimeoutError("camera read timeout")
 
