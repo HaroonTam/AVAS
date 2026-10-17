@@ -6,7 +6,7 @@ import logging
 from configparser import ConfigParser
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from time import monotonic, time_ns
+from time import monotonic, perf_counter, time_ns
 from typing import Protocol
 
 from app.agent.console import ConsoleWorker, WindowsLineSource
@@ -77,20 +77,20 @@ class PerceptionPipeline:
         ):
             return LiveResult(scene, (), "not_processed_stale", {})
         timings: dict[str, float] = {}
-        started = monotonic()
+        started = perf_counter()
         detections = self._detector.detect(frame.image)
-        timings["detection"] = (monotonic() - started) * 1000
+        timings["detection"] = (perf_counter() - started) * 1000
         depth = None
         depth_status = "unavailable"
         if self._depth is not None:
-            started = monotonic()
+            started = perf_counter()
             try:
                 depth = self._depth.estimate(frame.image, frame.frame_id)
                 depth_status = "available"
             except Exception as exc:
                 logging.error("Depth unavailable: %s", exc)
-            timings["depth"] = (monotonic() - started) * 1000
-        started = monotonic()
+            timings["depth"] = (perf_counter() - started) * 1000
+        started = perf_counter()
         detection_frame = DetectionFrame(
             frame.frame_id, frame.image.shape[1], frame.image.shape[0], detections
         )
@@ -100,7 +100,7 @@ class PerceptionPipeline:
             logging.error("Fusion depth rejected: %s", exc)
             observations = fuse_frame(detection_frame, None, self._fusion)
             depth_status = "rejected"
-        timings["fusion"] = (monotonic() - started) * 1000
+        timings["fusion"] = (perf_counter() - started) * 1000
         objects = tuple(
             RiskObject(
                 item.id,
@@ -366,9 +366,9 @@ def main(
                 ):
                     logging.error("Final unavailable notification did not finish")
                 break
-            started = monotonic()
+            started = perf_counter()
             assessment = assess_scene(result.scene, time_ns() // 1_000_000, risk)
-            result.latencies_ms["risk"] = (monotonic() - started) * 1000
+            result.latencies_ms["risk"] = (perf_counter() - started) * 1000
             expiry = frame.captured_monotonic + risk.freshness_ms / 1000
             if assessment.status != "available":
                 expiry = monotonic() + 5
@@ -406,6 +406,7 @@ def main(
             if performance is not None:
                 measurement = {
                     "performance": {
+                        "stage_clock": "perf_counter",
                         "result_index": count + 1,
                         "warmup": count == 0,
                         "loop_started_monotonic_s": loop_started,

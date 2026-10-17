@@ -8,6 +8,7 @@ from configparser import ConfigParser
 from importlib.metadata import PackageNotFoundError, version
 from math import isfinite
 from pathlib import Path
+from time import get_clock_info
 from typing import TextIO
 
 import numpy as np
@@ -33,6 +34,13 @@ class PerformanceRecorder:
             "protocol": "live_performance_v1",
             "cuda_peak_allocated_bytes": None,
             "resource_status": "not_started",
+            "clocks": {
+                name: {
+                    "implementation": get_clock_info(name).implementation,
+                    "resolution_s": get_clock_info(name).resolution,
+                }
+                for name in ("perf_counter", "monotonic")
+            },
         }
         self._output: TextIO = destination.open("x", encoding="utf-8")
 
@@ -167,6 +175,7 @@ def summarize_rows(rows: list[dict[str, object]]) -> dict[str, object]:
     loop_start: float | None = None
     processed = valid = stale = degraded = fault = 0
     dimensions: set[tuple[int, int]] = set()
+    stage_clocks: set[str] = set()
     for row in rows:
         metadata = row.get("performance")
         if not isinstance(metadata, dict):
@@ -178,6 +187,15 @@ def summarize_rows(rows: list[dict[str, object]]) -> dict[str, object]:
                 "missing performance metadata; rerun with measurement enabled"
             )
         processed += 1
+        stage_clock = metadata.get("stage_clock", "legacy_monotonic")
+        if not isinstance(stage_clock, str) or stage_clock not in (
+            "legacy_monotonic",
+            "perf_counter",
+        ):
+            raise ValueError("unknown stage clock")
+        stage_clocks.add(stage_clock)
+        if len(stage_clocks) > 1:
+            raise ValueError("cannot pool different stage clocks")
         if metadata.get("result_index") != processed:
             raise ValueError("missing, duplicate or reordered results")
         if metadata.get("warmup") is not (processed == 1):
@@ -217,6 +235,7 @@ def summarize_rows(rows: list[dict[str, object]]) -> dict[str, object]:
     )
     return {
         "protocol": "live_performance_v1",
+        "stage_clock": next(iter(stage_clocks), None),
         "result_count": processed,
         "valid_post_warmup_count": valid,
         "stale_count_including_warmup": stale,

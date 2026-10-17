@@ -40,6 +40,15 @@ def row(index: int, end: float, *, current: bool = True) -> dict[str, object]:
 
 
 class LivePerformanceTests(unittest.TestCase):
+    def test_mixed_clock_samples_rejected(self) -> None:
+        """旧单调时钟与新高分辨率时钟样本不得混池，避免掩盖量化误差。"""
+        old, new = row(1, 11), row(2, 12)
+        metadata = new["performance"]
+        assert isinstance(metadata, dict)
+        metadata["stage_clock"] = "perf_counter"
+        with self.assertRaisesRegex(ValueError, "different stage clocks"):
+            summarize_rows([old, new])
+
     def test_cuda_peak_reset_and_cpu_unknown(self) -> None:
         """合成后端验证先重置后读峰值且不做同步；CPU 不伪造显存零值。"""
         for cuda in (True, False):
@@ -135,7 +144,7 @@ class LivePerformanceTests(unittest.TestCase):
             self.assertIsNone(report["cuda_peak_allocated_bytes"])
 
     def test_measurement_follows_warning_dispatch(self) -> None:
-        """启用测量后仍先派发告警；输出保留所有阶段且峰值只在初始化与收尾处理。"""
+        """亚毫秒分段独立于粗粒度单调时钟；仍先派发告警，采集到派发语义不变。"""
         frame = CapturedFrame(
             "synthetic:1",
             time_ns() // 1_000_000,
@@ -166,6 +175,8 @@ class LivePerformanceTests(unittest.TestCase):
             patch("app.live.CameraService") as camera,
             patch("app.live.PerformanceRecorder") as recorder,
             patch("app.live.dispatch_warnings", side_effect=dispatch),
+            patch("app.live.monotonic", return_value=frame.captured_monotonic + 1),
+            patch("app.live.perf_counter", side_effect=[100.0, 100.0001] * 4),
             redirect_stdout(output),
             self.assertLogs(level="WARNING"),
         ):
@@ -194,3 +205,7 @@ class LivePerformanceTests(unittest.TestCase):
         self.assertEqual(payload["performance"]["result_index"], 1)
         self.assertEqual(payload["performance"]["width"], 20)
         self.assertEqual(payload["speech_accepted"], 1)
+        for stage in ("detection", "depth", "fusion", "risk"):
+            self.assertAlmostEqual(payload["latencies_ms"][stage], 0.1)
+        self.assertAlmostEqual(payload["latencies_ms"]["capture_to_dispatch"], 1000)
+        self.assertEqual(payload["performance"]["stage_clock"], "perf_counter")
