@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from math import ceil, floor
 
 import numpy as np
+from numpy.typing import NDArray
 
 from app.fusion.config import FusionConfig
 from app.fusion.direction import Direction, estimate_direction
@@ -81,6 +82,37 @@ def sampling_region(
     )
 
 
+def filtered_statistics(
+    values: NDArray[np.float64], count: int, config: FusionConfig
+) -> tuple[str, int, float, float | None, float | None]:
+    """对已筛除无效值的一维样本执行生产分位数过滤；保留输入单位，不负责单位转换。"""
+    if count <= 0 or values.ndim != 1 or values.size > count:
+        raise ValueError("invalid sample count or shape")
+    if not np.isfinite(values).all():
+        raise ValueError("statistics input must be finite")
+    fraction = int(values.size) / count
+    retained_count = 0
+    status = "insufficient_valid_pixels"
+    value = spread = None
+    if values.size:
+        low, high = np.quantile(
+            values, [config.trim_fraction, 1 - config.trim_fraction]
+        )
+        retained = values[(values >= low) & (values <= high)]
+        retained_count = int(retained.size)
+        minimum = 1 if config.method == "center_pixel" else config.min_valid_pixels
+        if retained_count >= minimum and fraction >= config.min_valid_fraction:
+            status = "available"
+            value = float(
+                np.mean(retained)
+                if config.method == "box_mean"
+                else np.median(retained)
+            )
+            q1, q3 = np.quantile(retained, [0.25, 0.75])
+            spread = float(q3 - q1)
+    return status, retained_count, fraction, value, spread
+
+
 def summarize_depth(
     bbox: tuple[int, int, int, int], depth: RelativeDepth | None, config: FusionConfig
 ) -> DepthSummary:
@@ -97,24 +129,9 @@ def summarize_depth(
         mask = depth.valid_mask[y1:y2, x1:x2]
         values = region[mask & np.isfinite(region) & (region >= 0)].astype(np.float64)
         valid_count = int(values.size)
-        fraction = valid_count / count
-        status = "insufficient_valid_pixels"
-        if valid_count:
-            low, high = np.quantile(
-                values, [config.trim_fraction, 1 - config.trim_fraction]
-            )
-            retained = values[(values >= low) & (values <= high)]
-            retained_count = int(retained.size)
-            minimum = 1 if config.method == "center_pixel" else config.min_valid_pixels
-            if retained_count >= minimum and fraction >= config.min_valid_fraction:
-                status = "available"
-                value = float(
-                    np.mean(retained)
-                    if config.method == "box_mean"
-                    else np.median(retained)
-                )
-                q1, q3 = np.quantile(retained, [0.25, 0.75])
-                spread = float(q3 - q1)
+        status, retained_count, fraction, value, spread = filtered_statistics(
+            values, count, config
+        )
     return DepthSummary(
         status,
         config.method,

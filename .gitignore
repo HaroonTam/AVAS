@@ -15,6 +15,7 @@ dist/
 *.onnx
 *.safetensors
 models/depth-anything-v2-small-hf/
+models/depth-anything-v2-metric-indoor-small-hf/
 data/raw/
 data/processed/
 runs/
