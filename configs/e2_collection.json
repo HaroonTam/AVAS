@@ -1,0 +1,18 @@
+{
+  "schema": "e2_collection_plan_v1",
+  "collection_id": "e2_board_multiscene_v1",
+  "installation_id": "omen_h0265_v1",
+  "roi_policy": "board_lower_half_v1",
+  "groups": {
+    "scene02": "fit",
+    "scene03": "fit",
+    "scene04": "fit",
+    "scene05": "validation",
+    "scene06": "validation",
+    "scene07": "test",
+    "scene08": "test"
+  },
+  "distance_targets_m": [0.5, 1.0, 1.5, 2.0, 3.0],
+  "independent_placements_per_distance": 2,
+  "test_status": "locked_until_selection_protocol_frozen"
+}

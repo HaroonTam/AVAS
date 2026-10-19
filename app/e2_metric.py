@@ -10,7 +10,14 @@ from pathlib import Path
 import numpy as np
 
 from app.e2_capture import ROOT
-from app.e2_offline import digest, frozen_paths, load_sample, mapping, read_image
+from app.e2_offline import (
+    digest,
+    frozen_paths,
+    load_sample,
+    mapping,
+    read_image,
+    string,
+)
 from app.fusion.config import FusionConfig, load_fusion_config
 from app.fusion.depth_fusion import filtered_statistics, sampling_region
 from app.vision.depth_estimator import DepthMap, load_depth_config
@@ -155,13 +162,29 @@ def run_metric(manifest: Path, output: Path, directory: Path, config: Path) -> N
         raise ValueError("expected reviewed board_lower_half_v1 manifest")
     fusion = load_fusion_config(config)
     samples = [
-        load_sample(path, fusion, digest(config))
+        load_sample(
+            path,
+            fusion,
+            digest(config),
+            string(frozen.get("split", "development_precapture")),
+        )
         for path in frozen_paths(manifest, ROOT / "outputs")
     ]
     if len({s.image_hash for s in samples}) != len(samples):
         raise ValueError("duplicate images")
     if len({s.measurement.installation_id for s in samples}) != 1:
         raise ValueError("mixed installations")
+    if frozen.get("split", "development_precapture") != "development_precapture":
+        plans = {
+            (
+                string(s.collection.get("collection_id")),
+                string(s.collection.get("plan_sha256")),
+            )
+            for s in samples
+            if s.collection is not None
+        }
+        if len(plans) != 1:
+            raise ValueError("mixed collection plans")
     depth_config = load_depth_config(config)
     backend = MetricBackend(directory, depth_config.device, depth_config.image_size)
     output.mkdir(parents=True, exist_ok=False)
@@ -175,6 +198,7 @@ def run_metric(manifest: Path, output: Path, directory: Path, config: Path) -> N
             "image_sha256": sample.image_hash,
             "truth_m": sample.measurement.distance_m,
             "analysis_roi": bbox,
+            "collection": sample.collection,
             "metric_evidence": None,
         }
         try:
@@ -206,7 +230,8 @@ def run_metric(manifest: Path, output: Path, directory: Path, config: Path) -> N
         ).stdout.strip(),
         "sample_count": len(rows),
         "samples": rows,
-        "dataset_role": "single_scene_development_not_independent_test",
+        "dataset_role": "development_not_independent_test",
+        "split": frozen.get("split", "development_precapture"),
         "roi_policy": "board_lower_half_v1",
     }
     with (output / "report.json").open("x", encoding="utf-8") as stream:
