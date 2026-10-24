@@ -1,0 +1,25 @@
+{
+  "schema": "e2_research_acceptance_v1",
+  "status": "user_confirmed_research_targets",
+  "confirmed_on": "2026-10-24",
+  "source": "User confirmed proposed targets in this conversation",
+  "draft_sha256": "3cf2ad763c44acffb1c6983c08e134c34064670a2bbc4ab95d06ed3a04e73b4c",
+  "targets": {
+    "overall_coverage_min": 0.9,
+    "each_group_coverage_min": 0.8,
+    "each_nominal_distance_coverage_min": 0.75,
+    "valid_mae_m_max": 0.2,
+    "valid_rmse_m_max": 0.3,
+    "valid_absrel_max": 0.2,
+    "valid_absolute_error_m_max": 0.5,
+    "near_truth_m_lte": 1.05,
+    "near_overestimate_m_max": 0.2
+  },
+  "all_targets_required": true,
+  "missing_or_empty_metric": "not_pass",
+  "purpose": "undergraduate_planar_target_distance_research",
+  "test_unlocked": false,
+  "production_approved": false,
+  "candidate_and_range_status": "under_development_not_frozen",
+  "disclosure": "Research targets confirmed after validation analysis and before independent testing; not a safety certification."
+}
