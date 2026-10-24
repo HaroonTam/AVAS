@@ -1,0 +1,10 @@
+{
+  "schema": "e2_comparison_protocol_v1",
+  "candidates": ["A1", "A2", "B0"],
+  "inverse_denominator_epsilon_per_m": 1e-8,
+  "near_distance_m": 1.05,
+  "fit_objective": "ordinary_least_squares_in_Z_for_A1_and_inverse_Z_for_A2",
+  "extrapolation_policy": "report_without_clipping_diagnostic_only",
+  "acceptance_thresholds": null,
+  "note": "Development comparison only. Near slice includes measured deviations around the 1 m placements; not a risk threshold. No production support or test release."
+}
