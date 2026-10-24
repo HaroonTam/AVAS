@@ -1,0 +1,61 @@
+{
+  "schema": "e2_test_protocol_draft_v1",
+  "status": "draft_not_approved_not_executable",
+  "purpose": "undergraduate_planar_target_distance_research",
+  "test_unlocked": false,
+  "production_approved": false,
+  "source_comparison_sha256": "aa89fbde090c7b3e997cd60281a59a2287fe32feef4f32134f8983483b287c72",
+  "collection_plan_sha256": "2ad41e2b99c3a89e619cbb1351e8db5c3a1017426be80bb64affcfad99ab59f1",
+  "candidate_under_review": {
+    "candidate": "A1",
+    "a": -0.48367453680465,
+    "b": 3.213225617104336,
+    "status": "fitted",
+    "fitted_count": 30,
+    "input_min": 0.909178614616394,
+    "input_max": 6.180361270904541,
+    "truth_min_m": 0.5,
+    "truth_max_m": 3.0
+  },
+  "range_rule": {
+    "endpoints": "inclusive",
+    "relative_min": 0.909178614616394,
+    "relative_max": 6.180361270904541,
+    "prediction_min_m": 0.5,
+    "prediction_max_m": 3.0,
+    "out_of_range": "reject_without_clipping",
+    "note": "Prediction interval is not a guarantee about the true target distance."
+  },
+  "proposed_research_targets": {
+    "overall_coverage_min": 0.9,
+    "each_group_coverage_min": 0.8,
+    "each_nominal_distance_coverage_min": 0.75,
+    "valid_mae_m_max": 0.2,
+    "valid_rmse_m_max": 0.3,
+    "valid_absrel_max": 0.2,
+    "valid_absolute_error_m_max": 0.5,
+    "near_truth_m_lte": 1.05,
+    "near_overestimate_m_max": 0.2
+  },
+  "all_targets_required": true,
+  "missing_or_empty_metric": "not_pass",
+  "test_design": {
+    "groups": [
+      "scene07",
+      "scene08"
+    ],
+    "samples_per_group": 10,
+    "nominal_distances_m": [
+      0.5,
+      1,
+      1.5,
+      2,
+      3
+    ],
+    "placements_per_distance_per_group": 2,
+    "unseen_target_required_in_at_least_one_group": true
+  },
+  "current_validation_gate": "fails_proposed_coverage_targets_15_of_20",
+  "next_step": "confirm_research_targets_then_address_development_coverage_before_test_release",
+  "disclosure": "Targets proposed after validation analysis, before independent test. Not a safety standard. No targets approved yet."
+}
