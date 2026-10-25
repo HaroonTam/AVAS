@@ -1,0 +1,19 @@
+{
+  "schema": "e2_collection_plan_v1",
+  "collection_id": "e2_boundary_fit_replacement_v1",
+  "installation_id": "omen_h0265_v1",
+  "roi_policy": "board_lower_half_v1",
+  "groups": {
+    "scene12": "fit"
+  },
+  "distance_targets_m": [
+    0.4,
+    0.5,
+    0.6,
+    2.75,
+    3.0,
+    3.25
+  ],
+  "independent_placements_per_distance": 2,
+  "test_status": "locked_until_selection_protocol_frozen"
+}

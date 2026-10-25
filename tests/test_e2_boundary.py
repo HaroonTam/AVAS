@@ -37,6 +37,7 @@ class BoundaryCollectionTests(unittest.TestCase):
                 ("scene09", "e2_boundary_fit.json", "fit"),
                 ("scene10", "e2_boundary_fit.json", "fit"),
                 ("scene11", "e2_boundary_validation.json", "validation"),
+                ("scene12", "e2_boundary_fit_replacement.json", "fit"),
             ]:
                 plan = ROOT / "configs" / filename
                 context = prepare_collection(
@@ -60,6 +61,7 @@ class BoundaryCollectionTests(unittest.TestCase):
         script = str(ROOT / "scripts/collect_e2_boundary.ps1")
         for group, end, expected_code in [
             ("scene09", "12", 0),
+            ("scene12", "12", 0),
             ("scene11", "10", 0),
             ("scene11", "12", 1),
         ]:
@@ -88,3 +90,5 @@ class BoundaryCollectionTests(unittest.TestCase):
             self.assertEqual(result.returncode, expected_code, result.stderr)
             if expected_code == 0:
                 self.assertEqual(len(result.stdout.splitlines()), int(end))
+                if group == "scene12":
+                    self.assertIn(b"e2_boundary_fit_replacement.json", result.stdout)

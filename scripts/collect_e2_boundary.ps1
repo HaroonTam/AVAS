@@ -1,7 +1,7 @@
 ﻿# E2 边界补采：仅由用户在终端启动；Preview 不访问相机或调用 Python。
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('scene09', 'scene10', 'scene11')]
+    [ValidateSet('scene09', 'scene10', 'scene11', 'scene12')]
     [string]$Group,
     [ValidateRange(1, 12)]
     [int]$StartPlacement = 1,
@@ -17,6 +17,8 @@ $e2Root = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $e2Root
 $e2PlanPath = if ($Group -eq 'scene11') {
     'configs/e2_boundary_validation.json'
+} elseif ($Group -eq 'scene12') {
+    'configs/e2_boundary_fit_replacement.json'
 } else {
     'configs/e2_boundary_fit.json'
 }

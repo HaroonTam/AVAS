@@ -1,5 +1,31 @@
 # E2 边界补采（研究目标已确认）
 
+## 2026-10-25：scene12 替代未完成的 scene09
+
+scene09 原位置不足 3 m，仅一条 p01，保留原记录但不计为完整拟合布景。
+scene10 已完成 12 条，scene11 已完成 10 条。用户确认另一个位置有实际不同背景/布置且
+可覆盖 3.25 m，新登记 scene12（fit），使用独立计划
+`configs/e2_boundary_fit_replacement.json`、collection_id `e2_boundary_fit_replacement_v1`。
+旧计划与哈希不改。后续补充拟合集采用 scene10 + scene12 共 24 条；scene09 单条作为
+未完成组留存，不悄悄合入正式比较。多计划合并入口需显式记录这个取舍，不能要求补回旧位置。
+
+scene12 继续使用同一 A02 纸箱和相机安装，距离档 0.4/0.5/0.6/2.75/3/3.25 m，各两次。
+先执行首条并审查图像：
+
+```powershell
+Set-Location 'D:\A Visual Assistance System for Visually Impaired People Based on YOLO11 and Depth Anything V2'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/collect_e2_boundary.ps1 -Group scene12 -StartPlacement 1 -EndPlacement 1
+```
+
+首条核对后，再执行剩余 11 条：
+
+```powershell
+Set-Location 'D:\A Visual Assistance System for Visually Impaired People Based on YOLO11 and Depth Anything V2'
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/collect_e2_boundary.ps1 -Group scene12 -StartPlacement 2 -EndPlacement 12
+```
+
+下方为原始计划与操作记录，不要求重采已完成的 scene10/11。
+
 2026-10-24。用户已确认研究目标，固定于 `configs/e2_research_acceptance.json`。
 仅目标得到确认，最终候选系数、范围策略和独立测试授权尚未冻结；scene07/08 继续锁定。
 
