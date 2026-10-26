@@ -22,6 +22,7 @@ def feedback_text(status: str) -> str | None:
         "scene_stale": "本次查询的环境信息已过期，请重新查询。",
         "scene_changed": "本次查询期间场景已变化，请重新查询。",
         "answer_expired": "本次回答已失效，请重新查询。",
+        "request_cancelled": "本次查询已取消。",
         "frame_mismatch": "本次选择的帧已更新，请重新选择目标。",
         "stt:unrecognized": "本次未可靠识别命令，请重新听取或使用键盘。",
         "stt:timeout": "本次听取超时，请重新听取。",
@@ -99,12 +100,16 @@ class SpokenReply:
             )
             self.status = "feedback_queued" if accepted else "queue_rejected"
 
-    def respond(self, text: str) -> AssistantAnswer:
-        """事实回答绑定场景凭据；无帧的帮助及已知失败仅朗读固定白名单文本。"""
+    def respond(self, text: str, *, cancel: Event | None = None) -> AssistantAnswer:
+        """事实回答绑定原场景凭据；取消后不入队，无帧反馈只使用固定白名单。"""
         lease = self._store.acquire_lease()
-        answer = self._assistant.respond(text)
+        answer = (
+            self._assistant.respond(text, cancel=cancel)
+            if cancel is not None
+            else self._assistant.respond(text)
+        )
         self.status = "not_queued"
-        if self._closed.is_set():
+        if self._closed.is_set() or (cancel is not None and cancel.is_set()):
             self.status = "closed"
             return answer
         if answer.frame_id is None and feedback_text(answer.status) is not None:

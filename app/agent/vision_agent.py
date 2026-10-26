@@ -1,8 +1,10 @@
 """本地受限文字交互：结构化请求、只读查询及输出前事实复核。"""
 
 from dataclasses import dataclass
+from threading import Event
 from typing import Literal
 
+from app.agent.deepseek import ExpressionPlan, PlanOrganizer
 from app.agent.labels import LABEL_NAMES, format_label
 from app.agent.tools import ObjectFact, SceneTools, ToolResult
 from app.fusion.direction import Direction
@@ -145,6 +147,49 @@ def describe_fact(item: ObjectFact) -> str:
     )
 
 
+def apply_expression_plan(
+    answer: AssistantAnswer, evidence: ToolResult, plan: ExpressionPlan
+) -> AssistantAnswer:
+    """仅替换已有事实子句的本地模板；风险前缀、未知项、目标顺序及其余说明均保留。"""
+    if plan.frame_id != answer.frame_id:
+        return answer
+    styles = {item.object_id: item.focus for item in plan.styles}
+    if (
+        len(styles) != len(plan.styles)
+        or set(styles) != {item.id for item in evidence.objects}
+        or any(
+            value not in ("identity_first", "direction_first")
+            for value in styles.values()
+        )
+    ):
+        return answer
+    message = answer.message
+    for item in evidence.objects:
+        if styles[item.id] != "direction_first":
+            continue
+        original = describe_fact(item)
+        # 每句必须精确对应本地事实；异常类别造成子句碰撞时整个计划降级。
+        if message.count(original) != 1:
+            return answer
+        direction = {
+            "left": "图像左侧",
+            "front": "图像前方",
+            "right": "图像右侧",
+            None: "方向未知",
+        }[item.direction]
+        distance = (
+            f"约 {item.distance_m:.1f} 米"
+            if item.distance_m is not None
+            else "米制距离不可用"
+        )
+        replacement = (
+            f"{direction}：目标 {item.id}（类别 {format_label(item.label)}），"
+            f"{distance}。"
+        )
+        message = message.replace(original, replacement, 1)
+    return AssistantAnswer(answer.status, answer.frame_id, message)
+
+
 def describe_candidates(result: ToolResult) -> str:
     """从已复核的匹配对象生成方向分布与最多三个帧内候选，不选择或推测距离。"""
     names = {
@@ -174,9 +219,17 @@ def describe_candidates(result: ToolResult) -> str:
 
 
 class VisionAssistant:
-    def __init__(self, tools: SceneTools) -> None:
-        """只依赖场景查询工具，不持有告警、语音、相机或规则修改接口。"""
+    def __init__(
+        self, tools: SceneTools, *, organizer: PlanOrganizer | None = None
+    ) -> None:
+        """绑定只读工具及可选表达编排器，不持有告警、语音、相机或规则修改接口。"""
         self._tools = tools
+        self._organizer = organizer
+
+    @property
+    def cloud_enabled(self) -> bool:
+        """说明是否需要可取消的交互等待；不表示已联网或后端可用。"""
+        return self._organizer is not None
 
     def _query(self, request: SceneRequest) -> ToolResult:
         """帮助返回固定说明，其余已验证请求分派只读工具；不接受自由工具名称。"""
@@ -222,8 +275,8 @@ class VisionAssistant:
                 message += "".join(describe_fact(item) for item in current.objects)
         return AssistantAnswer(current.status, current.frame_id, message)
 
-    def respond(self, text: str) -> AssistantAnswer:
-        """同步本地文字入口；不理解时提示有限语法，工具失败时不编造事实。"""
+    def respond(self, text: str, *, cancel: Event | None = None) -> AssistantAnswer:
+        """解析后只发送当前事实；云端失败回退，完成前重新复核，取消后丢弃结果。"""
         request = parse_request(text)
         if request is None:
             return AssistantAnswer(
@@ -233,6 +286,30 @@ class VisionAssistant:
                 "“左侧的椅子在哪里”或“距离 帧ID 目标ID”。",
             )
         try:
-            return self.finalize(self.prepare(request))
+            cancellation = cancel if cancel is not None else Event()
+            if cancellation.is_set():
+                return AssistantAnswer("request_cancelled", None, "本次查询已取消。")
+            draft = self.prepare(request)
+            answer = self.finalize(draft)
+            if (
+                self._organizer is None
+                or request.intent not in {"describe", "find", "distance"}
+                or draft.evidence.status not in {"available", "distance_unavailable"}
+                or answer.frame_id is None
+                or not draft.evidence.objects
+                or len(draft.evidence.objects) > 3
+            ):
+                return answer
+            try:
+                plan = self._organizer.arrange(request, draft.evidence, cancellation)
+            except Exception:
+                # 可选后端异常不能关闭本地交互或传播到确定性告警。
+                plan = None
+            if cancellation.is_set():
+                return AssistantAnswer("request_cancelled", None, "本次查询已取消。")
+            answer = self.finalize(draft)
+            if plan is not None and answer.frame_id == draft.evidence.frame_id:
+                answer = apply_expression_plan(answer, draft.evidence, plan)
+            return answer
         except (ValueError, RuntimeError, TypeError, AttributeError):
             return AssistantAnswer("tools_unavailable", None, "场景查询暂时不可用。")

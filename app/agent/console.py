@@ -6,7 +6,7 @@ from threading import Event, Thread
 from typing import Callable, Protocol
 
 from app.agent.spoken_reply import SpokenReply
-from app.agent.vision_agent import VisionAssistant
+from app.agent.vision_agent import AssistantAnswer, VisionAssistant
 from app.speech.stt import CommandRecognizer, Recognition
 
 
@@ -89,6 +89,7 @@ class ConsoleWorker:
         self._source = source
         self._emit = emit
         self._stop = Event()
+        self._request_cancel: Event | None = None
         self.exit_requested = Event()
         self.finished = Event()
         self.error: str | None = None
@@ -193,11 +194,14 @@ class ConsoleWorker:
                         continue
                     text = recognition.command
                     self._emit(f"[stt:recognized] {text}\n")
-                answer = (
-                    self._spoken_reply.respond(text)
-                    if self._spoken_reply is not None
-                    else self._assistant.respond(text)
-                )
+                if self._assistant.cloud_enabled is True:
+                    answer = self._respond_cloud(text)
+                else:
+                    answer = (
+                        self._spoken_reply.respond(text)
+                        if self._spoken_reply is not None
+                        else self._assistant.respond(text)
+                    )
                 if not self._stop.is_set():
                     frame = f"，帧 {answer.frame_id}" if answer.frame_id else ""
                     self._emit(f"[{answer.status}{frame}] {answer.message}\n> ")
@@ -215,12 +219,70 @@ class ConsoleWorker:
         finally:
             self.finished.set()
 
+    def _respond_cloud(self, text: str) -> AssistantAnswer:
+        """单次后台查询期间继续接收取消和退出；不缓存新请求，不输出迟到结果。"""
+        cancel, done = Event(), Event()
+        self._request_cancel = cancel
+        results: list[AssistantAnswer] = []
+
+        def respond() -> None:
+            """隔离可选云端查询，异常只转换为本地固定状态，不记录正文。"""
+            try:
+                results.append(
+                    self._spoken_reply.respond(text, cancel=cancel)
+                    if self._spoken_reply is not None
+                    else self._assistant.respond(text, cancel=cancel)
+                )
+            except Exception:
+                results.append(
+                    AssistantAnswer("tools_unavailable", None, "场景查询暂时不可用。")
+                )
+            finally:
+                done.set()
+
+        thread = Thread(target=respond, name="agent-request", daemon=True)
+        thread.start()
+        try:
+            while not done.wait(0.01):
+                if self._stop.is_set():
+                    cancel.set()
+                    break
+                command = self._source.poll()
+                if command is None or not command.strip():
+                    continue
+                if command.strip() in {"quit", "exit", "退出"}:
+                    cancel.set()
+                    self.exit_requested.set()
+                    self._stop.set()
+                    break
+                if command.strip() in {"cancel", "取消"}:
+                    cancel.set()
+                    break
+                self._emit("正在查询；本行未执行。输入取消或退出。\n")
+        finally:
+            if self._stop.is_set() or not done.is_set():
+                cancel.set()
+            thread.join(timeout=1.0)
+            self._request_cancel = None
+            if thread.is_alive():
+                self.error = "agent shutdown timed out; interaction stopped"
+                self._stop.set()
+        if cancel.is_set() or self._stop.is_set():
+            return AssistantAnswer("request_cancelled", None, "本次查询已取消。")
+        return results[0]
+
     def close(self) -> None:
         """有界停止交互；不关闭进程共享的标准输入输出。"""
         self._stop.set()
+        if self._request_cancel is not None:
+            self._request_cancel.set()
         if self._spoken_reply is not None:
             self._spoken_reply.close()
         if self._thread.ident is not None:
-            self._thread.join(timeout=2.0 if self._recognizer is not None else 0.5)
+            self._thread.join(
+                timeout=2.0
+                if self._recognizer is not None or self._assistant.cloud_enabled is True
+                else 0.5
+            )
             if self._thread.is_alive():
                 self.error = "console shutdown timed out"

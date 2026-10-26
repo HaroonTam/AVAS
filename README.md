@@ -176,6 +176,10 @@ PyCharm 设置模块 `app.live`、工作目录 `$PROJECT_DIR$`，参数 `--max-f
 该模式开启声音，使用低优先级队列；播放前拒绝已过期或已换帧的回答，告警仍可抢占。
 支持语法、嵌入方式与限制见 [本地交互说明](docs/local_assistant.md)。
 
+可选 DeepSeek 云端语言编排已提供显式配置、事实校验和本地降级；
+仅发送结构化场景与解析意图。配置、合成连通检查及用户启动命令见
+[DeepSeek 接入说明](docs/deepseek_agent.md)，真实 API 效果尚未验证。
+
 可选语音输入：`D:\python\python.exe -m app.live --console --voice-input --no-speech`。
 该命令开启摄像头；在控制台输入 `听取` 后才打开一次麦克风，识别固定中文命令。
 本机已发现中文识别器，但未实际录音验证；要求与限制见 [语音输入说明](docs/voice_input.md)。

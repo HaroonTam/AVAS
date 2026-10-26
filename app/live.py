@@ -10,6 +10,7 @@ from time import monotonic, perf_counter, time_ns
 from typing import Protocol
 
 from app.agent.console import ConsoleWorker, WindowsLineSource
+from app.agent.deepseek import DeepSeekOrganizer, load_deepseek_config
 from app.agent.spoken_reply import MAX_QUEUE_HORIZON_S, SpokenReply
 from app.agent.tools import SceneTools
 from app.agent.vision_agent import VisionAssistant
@@ -187,6 +188,11 @@ def main(
         default=Path(__file__).resolve().parents[1] / "configs/system.ini",
     )
     parser.add_argument(
+        "--agent-config",
+        type=Path,
+        help="Opt-in DeepSeek config; sends structured facts only (requires --console)",
+    )
+    parser.add_argument(
         "--no-speech", action="store_true", help="Diagnostic mode: logs/JSON only"
     )
     parser.add_argument(
@@ -224,6 +230,8 @@ def main(
         parser.error("--voice-input requires --console")
     if args.performance_output and args.console:
         parser.error("--performance-output requires per-frame JSONL mode")
+    if args.agent_config and not args.console:
+        parser.error("--agent-config requires --console")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     camera: CameraService | None = None
     speech: SpeechWorker | None = None
@@ -234,6 +242,16 @@ def main(
         settings = ConfigParser(interpolation=None)
         with args.config.open(encoding="utf-8") as source:
             settings.read_file(source)
+        organizer = None
+        if args.agent_config:
+            agent_config = load_deepseek_config(args.agent_config)
+            if agent_config.enabled and agent_config.allow_network:
+                organizer = DeepSeekOrganizer(agent_config)
+                logging.info(
+                    "DeepSeek enabled: structured scene and parsed intent only"
+                )
+            else:
+                logging.info("DeepSeek disabled: using local assistant")
         if args.performance_output:
             performance = PerformanceRecorder(args.performance_output, args.config)
         risk = load_risk_config(args.config)
@@ -288,7 +306,7 @@ def main(
         else:
             logging.warning("Spoken alerts disabled; diagnostic mode only")
         if console_source is not None:
-            assistant = VisionAssistant(SceneTools(scene_store))
+            assistant = VisionAssistant(SceneTools(scene_store), organizer=organizer)
             console = ConsoleWorker(
                 assistant,
                 console_source,
