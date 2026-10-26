@@ -1,0 +1,95 @@
+{
+  "schema": "e2_multiplan_recipe_v1",
+  "inverse_denominator_epsilon_per_m": 1e-08,
+  "exclusions": [
+    {
+      "group": "scene09",
+      "reason": "Incomplete group, location too short; retained, not used for fitting."
+    }
+  ],
+  "sources": [
+    {
+      "role": "original_fit",
+      "groups": [
+        "scene02",
+        "scene03",
+        "scene04"
+      ],
+      "plan": "configs/e2_collection.json",
+      "audit": "outputs/e2_fit_audit_77b96ca4d2924d95863a873b9f9a4f81/report.json",
+      "relative": "outputs/e2_fit_relative_271dbc33cd594a0c9a56dd64c55ee077/report.json",
+      "metric": "outputs/e2_fit_metric_ea0e973c8d8542639c7cd7b7ae028866/report.json",
+      "sha256": {
+        "plan": "2ad41e2b99c3a89e619cbb1351e8db5c3a1017426be80bb64affcfad99ab59f1",
+        "audit": "8a09ab6e5adb77937c767b57e5965a54b817e1d270aecdaf44983ccf0fb0b75e",
+        "relative": "04ac1c8e58f1d0702c01eefac069c544302a10671db7b1147ae495e5db0fc9f3",
+        "metric": "1347904741e323477f4184d9bef633a698b5c26b4a2e3cc96aa00a21d2e82fb5"
+      }
+    },
+    {
+      "role": "supplemental_fit",
+      "groups": [
+        "scene10"
+      ],
+      "plan": "configs/e2_boundary_fit.json",
+      "audit": "outputs/e2_scene10_audit_20261026_v1/report.json",
+      "relative": "outputs/e2_scene10_relative_6496442934d144d1ae1493cc93897a02/report.json",
+      "metric": "outputs/e2_scene10_metric_51226dd52ba34ab78c40e073341eebe5/report.json",
+      "sha256": {
+        "plan": "e0b9ed857cf189d063b2e716c9dcaea3e8897df9f2b14b97dd9237a63d037676",
+        "audit": "98e7f7a49b0b78093e24964bc56bd86ad8be7c50b55045fbfecc51f8e9fb800e",
+        "relative": "cd42f4bcce901a0138c42660e2f03ed8d380b22d07ab1570b4fa5d9d75a15c90",
+        "metric": "2d5391a68ecdd0d2fcabff93f704002335cf33d9a6b79b4224f5d73d2919980d"
+      }
+    },
+    {
+      "role": "supplemental_fit",
+      "groups": [
+        "scene12"
+      ],
+      "plan": "configs/e2_boundary_fit_replacement.json",
+      "audit": "outputs/e2_scene12_audit_20261026_v1/report.json",
+      "relative": "outputs/e2_scene12_relative_60399b403b6f4dcb899ff67ac8e5528f/report.json",
+      "metric": "outputs/e2_scene12_metric_3aabdf654dc94475b42a4b98023ccd87/report.json",
+      "sha256": {
+        "plan": "53a5734e05fa9ce34ca14dc23b8b831478a820a4ca4be77d14686a819a5d9b34",
+        "audit": "7e17be2c48c1eeb8dc3d7bcd7e4e80b0689c0d11f4498a1af31a94a328a830b4",
+        "relative": "0be013c06e564f529b9bb51130c8678593675b4fb738d8a0ccc4ee05c3ed9463",
+        "metric": "2cebc2079cfd4dfa73311861b1df2eacaf8862a5daa202b1a501e0588f0945ff"
+      }
+    },
+    {
+      "role": "old_validation",
+      "groups": [
+        "scene05",
+        "scene06"
+      ],
+      "plan": "configs/e2_collection.json",
+      "audit": "outputs/e2_validation_audit_0d59a50c9fb64b66a921366835f0e419/report.json",
+      "relative": "outputs/e2_validation_relative_676a78d4f99a4a4586a0d3ddbe84e878/report.json",
+      "metric": "outputs/e2_validation_metric_af283b6948204d24890e1f1bca7ef1ca/report.json",
+      "sha256": {
+        "plan": "2ad41e2b99c3a89e619cbb1351e8db5c3a1017426be80bb64affcfad99ab59f1",
+        "audit": "688a9be753667c43360d4995782f76ac039a7fd874d22c578a4cfca434d4a6a6",
+        "relative": "d4cf2acfe19fd291a702fdac49a5ebe2b762b0bd1d151b2484940da8c014d7ee",
+        "metric": "62c1893a264fb51c0333d02f0a1ba99fed431cd8a72aaecb414e8f14f58ed637"
+      }
+    },
+    {
+      "role": "new_validation",
+      "groups": [
+        "scene11"
+      ],
+      "plan": "configs/e2_boundary_validation.json",
+      "audit": "outputs/e2_boundary_validation_audit_384fef4494ac4ad99a443b526aa0e5c1/report.json",
+      "relative": "outputs/e2_boundary_validation_relative_e3851c106b3148098853fe5994fb9de9/report.json",
+      "metric": "outputs/e2_boundary_validation_metric_03a6b53adf2c4f378cfa1f770182a05a/report.json",
+      "sha256": {
+        "plan": "5acc01d9d2cdadc9f2bb4fd912faf1a05389a2120bcd8be718d9697b16d93137",
+        "audit": "4cc30759aa0181644c6751b72030d998a95500ac464f0805585bf580c4662cf5",
+        "relative": "9026ee9a4f0c9d4fc4adcc51e6da431e0ad9621bf21685fb406df62004a8b759",
+        "metric": "85b5c09c0452e11777fdc649b9706b8b535dc8e493283fee79311485ef2978d9"
+      }
+    }
+  ]
+}

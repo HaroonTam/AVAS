@@ -89,8 +89,10 @@ def load_pair(
     metric_path: Path,
     split: str,
     plan_path: Path,
+    *,
+    selected_groups: list[str] | None = None,
 ) -> list[Observation]:
-    """对齐冻结清单与两份报告，验证源文件、计划、安装及完整摆放编号。"""
+    """验证冻结报告；可显式选择计划内完整布景，不允许逐样本删选或跨划分选组。"""
     if split not in ("fit", "validation"):
         raise ValueError("test data locked")
     audit, relative, metric = [
@@ -131,6 +133,14 @@ def load_pair(
     if set(ar) != set(rr) or set(ar) != set(mr):
         raise ValueError("sample sets mismatch")
     groups = mapping(plan.get("groups"))
+    if selected_groups is not None:
+        if (
+            not selected_groups
+            or len(set(selected_groups)) != len(selected_groups)
+            or any(groups.get(group) != split for group in selected_groups)
+        ):
+            raise ValueError("invalid selected groups")
+        groups = {group: groups[group] for group in selected_groups}
     targets = plan.get("distance_targets_m")
     repeats = plan.get("independent_placements_per_distance")
     if not isinstance(targets, list) or not targets or type(repeats) is not int:
