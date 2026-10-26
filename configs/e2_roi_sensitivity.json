@@ -1,0 +1,14 @@
+{
+  "schema": "e2_roi_sensitivity_protocol_v1",
+  "groups": ["scene10", "scene11", "scene12"],
+  "nominal_distances_m": [0.5, 3.0],
+  "repeats_per_bin": 2,
+  "sample_count": 12,
+  "variants": ["original_statistics_v1", "center_half_of_statistics_v1"],
+  "center_fraction": 0.5,
+  "purpose": "Exploratory relative-depth ROI sensitivity on identical full-frame predictions",
+  "selection_basis": "Registered group and nominal distance only; all repeats retained",
+  "candidate_selection": false,
+  "test_unlocked": false,
+  "production_approved": false
+}
